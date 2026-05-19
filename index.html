@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A2A Chat — Agent 群聊</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, "Microsoft YaHei", sans-serif;
+  background: #2e2e2e; color: #d4d4d4;
+  display: flex; justify-content: center; align-items: center;
+  height: 100vh;
+}
+.app {
+  width: 100%; max-width: 960px; height: 100vh;
+  display: flex; background: #1a1a1a; position: relative;
+}
+
+/* ── Sidebar ───────────────────────────── */
+.sidebar {
+  width: 280px; min-width: 280px;
+  background: #1e1e1e; border-right: 1px solid #333;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.sidebar-section { border-bottom: 1px solid #2a2a2a; }
+.sidebar-section-header {
+  padding: 10px 14px; font-size: 12px; font-weight: bold; color: #888;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.sidebar-section-header .count { font-size: 11px; color: #666; font-weight: normal; }
+.sidebar-scroll { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+
+.agent-card {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 6px; border-radius: 8px; margin-bottom: 2px;
+}
+.agent-card:hover { background: #2a2a2a; }
+.agent-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.agent-dot.online { background: #52c41a; }
+.agent-dot.busy { background: #fa8c16; }
+.agent-dot.offline { background: #666; }
+.agent-info { flex: 1; min-width: 0; }
+.agent-name { font-size: 13px; font-weight: 500; }
+.agent-name.offline { color: #666; }
+.agent-task { font-size: 11px; color: #fa8c16; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-caps { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 2px; }
+
+.cap-badge {
+  display: inline-block; font-size: 10px;
+  padding: 1px 6px; border-radius: 3px;
+  background: #1677ff18; color: #1677ff;
+  border: 1px solid #1677ff33;
+}
+
+.task-card-sidebar {
+  padding: 8px 6px; border-radius: 6px; margin-bottom: 4px;
+  border-left: 3px solid #444; cursor: pointer; transition: background 0.15s;
+}
+.task-card-sidebar:hover { background: #2a2a2a; }
+.task-card-sidebar.pending { border-left-color: #1677ff; }
+.task-card-sidebar.claimed { border-left-color: #fa8c16; }
+.task-card-sidebar.completed { border-left-color: #52c41a; }
+.task-card-sidebar.failed, .task-card-sidebar.cancelled { border-left-color: #ff4d4f; }
+.task-sb-title { font-size: 12px; font-weight: 500; margin-bottom: 2px; }
+.task-sb-meta { font-size: 10px; color: #888; display: flex; gap: 8px; flex-wrap: wrap; }
+.task-sb-caps { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 3px; }
+.task-sb-desc { font-size: 10px; color: #999; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.sidebar-empty { font-size: 11px; color: #555; text-align: center; padding: 16px 0; }
+
+#newTaskBtn {
+  width: 100%; padding: 6px; margin-top: 4px;
+  background: #1677ff22; color: #1677ff; border: 1px dashed #1677ff44;
+  border-radius: 6px; font-size: 12px; cursor: pointer;
+}
+#newTaskBtn:hover { background: #1677ff33; }
+
+/* ── Main Chat Area ────────────────────── */
+.main {
+  flex: 1; display: flex; flex-direction: column; min-width: 0;
+}
+.header {
+  background: #2d2d2d; color: #fff;
+  padding: 10px 16px; font-size: 15px; font-weight: bold;
+  border-bottom: 1px solid #3a3a3a;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.header-left { display: flex; align-items: center; gap: 10px; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #4caf50; }
+.online-count { font-size: 12px; color: #999; font-weight: normal; }
+.header-right { display: flex; gap: 6px; }
+.tool-btn {
+  background: none; border: 1px solid transparent; color: #888;
+  font-size: 14px; cursor: pointer; padding: 3px 7px; border-radius: 4px;
+  transition: all 0.15s;
+}
+.tool-btn:hover { background: #383838; color: #e0e0e0; }
+.tool-btn.active { color: #1677ff; border-color: #1677ff33; background: #1677ff11; }
+
+.messages {
+  flex: 1; overflow-y: auto; padding: 14px 18px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+
+/* ── Message types ─────────────────────── */
+.msg {
+  display: flex; flex-direction: column; max-width: 82%;
+  animation: fadeIn 0.3s ease;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.msg.me { align-self: flex-end; }
+.msg.agent { align-self: flex-start; }
+.msg.system { align-self: center; max-width: 90%; }
+.msg.card { align-self: stretch; max-width: 100%; }
+
+.msg-sender {
+  font-size: 12px; color: #888; margin-bottom: 3px;
+  display: flex; align-items: center; gap: 6px;
+}
+.msg.me .msg-sender { justify-content: flex-end; }
+
+.msg-bubble {
+  padding: 9px 13px; border-radius: 16px;
+  font-size: 14px; line-height: 1.5; word-break: break-word;
+  color: #e0e0e0; background: #383838;
+}
+.msg.me .msg-bubble { background: #1677ff; color: #fff; }
+.msg.system .msg-bubble {
+  background: transparent; color: #777; font-size: 12px;
+  text-align: center; padding: 4px 12px;
+}
+
+.msg.task-create .msg-bubble {
+  background: #252525; border-left: 3px solid #1677ff;
+  border-radius: 8px; padding: 12px 14px;
+}
+.msg.task-complete .msg-bubble {
+  background: #252525; border-left: 3px solid #52c41a;
+  border-radius: 8px; padding: 12px 14px;
+}
+.msg.task-fail .msg-bubble, .msg.task-cancel .msg-bubble {
+  background: #252525; border-left: 3px solid #ff4d4f;
+  border-radius: 8px; padding: 12px 14px;
+}
+.msg.task-claim .msg-bubble {
+  background: transparent; color: #fa8c16; font-size: 12px;
+  text-align: center; padding: 4px 12px;
+}
+.msg.task-comment .msg-bubble {
+  background: #252525; border-left: 3px solid #888;
+  border-radius: 8px; padding: 10px 14px;
+}
+
+.task-card-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.task-card-desc { font-size: 12px; color: #999; margin-bottom: 4px; }
+.task-card-desc.truncated { max-height: 4.5em; overflow: hidden; position: relative; }
+.task-card-desc.truncated::after { content: ""; position: absolute; bottom: 0; right: 0; width: 60px; height: 1.5em; background: linear-gradient(90deg, transparent, #252525); }
+.task-card-toggle { font-size: 11px; color: #1677ff; cursor: pointer; margin-bottom: 6px; display: inline-block; }
+.task-card-result { font-size: 13px; color: #b7eb8f; margin-top: 6px; padding-top: 6px; border-top: 1px solid #333; }
+.task-card-result.truncated { max-height: 4.5em; overflow: hidden; position: relative; }
+.task-card-result.truncated::after { content: ""; position: absolute; bottom: 0; right: 0; width: 60px; height: 1.5em; background: linear-gradient(90deg, transparent, #252525); }
+.task-card-error { font-size: 13px; color: #ff7875; margin-top: 6px; padding-top: 6px; border-top: 1px solid #333; }
+.task-card-meta { font-size: 10px; color: #777; margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.task-card-badge {
+  display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 3px;
+}
+.task-card-badge.high { background: #ff4d4f22; color: #ff4d4f; border: 1px solid #ff4d4f33; }
+.task-card-badge.normal { background: #1677ff22; color: #1677ff; border: 1px solid #1677ff33; }
+.task-card-badge.low { background: #666; color: #999; border: 1px solid #444; }
+
+.msg.agent-register .msg-bubble {
+  background: transparent; color: #52c41a; font-size: 12px;
+  text-align: center; padding: 4px 12px;
+}
+.msg.agent-offline .msg-bubble {
+  background: transparent; color: #666; font-size: 12px;
+  text-align: center; padding: 4px 12px;
+}
+
+/* Highlight animation for task click */
+.msg.highlight .msg-bubble {
+  animation: flashBorder 0.6s ease-in-out 3;
+}
+@keyframes flashBorder {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(22,119,255,0); }
+  50% { box-shadow: 0 0 0 4px rgba(22,119,255,0.5); }
+}
+
+/* Unread divider */
+.unread-divider {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 0; text-align: center;
+}
+.unread-divider::before, .unread-divider::after {
+  content: ""; flex: 1; height: 1px; background: #ff4d4f33;
+}
+.unread-divider span {
+  font-size: 11px; color: #ff4d4f; font-weight: 500;
+}
+
+/* Event badges inline */
+.event-caps { display: inline-flex; flex-wrap: wrap; gap: 2px; margin-left: 4px; vertical-align: middle; }
+
+/* Avatar */
+.avatar {
+  width: 26px; height: 26px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; color: #fff; flex-shrink: 0;
+}
+.msg-time { font-size: 11px; color: #555; margin-top: 2px; }
+.msg.me .msg-time { text-align: right; }
+
+/* ── Jump to bottom button ─────────────── */
+#jumpBottom {
+  position: fixed; bottom: 80px; right: calc((100vw - 960px) / 2 + 40px);
+  width: 38px; height: 38px; border-radius: 50%;
+  background: #383838; color: #e0e0e0; border: 1px solid #444;
+  font-size: 18px; cursor: pointer; display: none; z-index: 100;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  transition: background 0.15s;
+}
+#jumpBottom:hover { background: #4a4a4a; }
+#jumpBottom.hasUnread { background: #1677ff; border-color: #1677ff; box-shadow: 0 2px 12px rgba(22,119,255,0.3); }
+
+/* ── Input Area ─────────────────────────── */
+.input-area {
+  padding: 10px 14px; background: #2d2d2d; border-top: 1px solid #3a3a3a;
+}
+.input-chat, .input-task { display: flex; gap: 8px; align-items: center; }
+.input-task { flex-wrap: wrap; }
+
+.input-area select, .input-area input, .input-area textarea {
+  background: #383838; color: #e0e0e0; border: 1px solid #444;
+  border-radius: 8px; padding: 8px 12px; font-size: 14px; outline: none;
+  font-family: inherit;
+}
+.input-area input:focus, .input-area textarea:focus, .input-area select:focus { border-color: #1677ff; }
+.input-area button {
+  background: #1677ff; color: #fff; border: none;
+  border-radius: 8px; padding: 8px 18px;
+  font-size: 14px; cursor: pointer; font-weight: 500; white-space: nowrap;
+}
+.input-area button:hover { background: #4096ff; }
+.input-area button.secondary {
+  background: #383838; color: #999; border: 1px solid #444;
+}
+.input-area button.secondary:hover { background: #444; color: #e0e0e0; }
+
+#senderSelect { min-width: 90px; }
+#chatInput { flex: 1; }
+#taskTitle { flex: 1; min-width: 120px; }
+#taskDesc { flex: 2; min-width: 150px; resize: none; height: 36px; }
+#taskCaps { width: 140px; }
+#taskPriority { width: 80px; }
+
+@media (max-width: 800px) {
+  .sidebar { width: 220px; min-width: 220px; }
+  .input-task { flex-direction: column; }
+  #taskTitle, #taskDesc, #taskCaps { width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ── Sidebar ── -->
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-section-header">
+        <span>AGENTS</span>
+        <span class="count" id="agentCount">--</span>
+      </div>
+      <div class="sidebar-scroll" id="agentList">
+        <div class="sidebar-empty">等待 agent 接入...</div>
+      </div>
+    </div>
+    <div class="sidebar-section" style="flex:1; display:flex; flex-direction:column;">
+      <div class="sidebar-section-header">
+        <span>TASKS</span>
+        <span class="count" id="taskCount">--</span>
+      </div>
+      <div class="sidebar-scroll" style="flex:1;" id="taskList">
+        <div class="sidebar-empty">暂无任务</div>
+      </div>
+      <div style="padding: 0 8px 8px;">
+        <button id="newTaskBtn" onclick="toggleTaskForm()">+ 创建新任务</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Main Chat ── -->
+  <div class="main">
+    <div class="header">
+      <div class="header-left">
+        <span class="status-dot"></span>
+        <span>A2A Agent 群聊</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span class="online-count" id="onlineCount">在线: --</span>
+        <div class="header-right">
+          <button class="tool-btn active" id="notifToggle" onclick="toggleNotif()" title="桌面通知">🔔</button>
+          <button class="tool-btn active" id="autoScrollToggle" onclick="toggleAutoScroll()" title="自动滚动">↓</button>
+        </div>
+      </div>
+    </div>
+    <div class="messages" id="messages"></div>
+    <button id="jumpBottom" onclick="scrollToBottom()" title="回到底部">↓</button>
+    <div class="input-area">
+      <!-- Chat mode -->
+      <div class="input-chat" id="inputChat">
+        <select id="senderSelect">
+          <option value="Yang">Yang (我)</option>
+          <option value="Claude">Claude</option>
+          <option value="Cursor">Cursor</option>
+          <option value="Codex">Codex</option>
+          <option value="OpenClaw">OpenClaw</option>
+        </select>
+        <input id="chatInput" placeholder="输入消息..." onkeydown="if(event.key==='Enter') sendMsg()">
+        <button onclick="sendMsg()">发送</button>
+        <button class="secondary" onclick="toggleTaskForm()" title="创建任务">+任务</button>
+      </div>
+      <!-- Task mode -->
+      <div class="input-task" id="inputTask" style="display:none;">
+        <input id="taskTitle" placeholder="任务标题">
+        <input id="taskDesc" placeholder="描述（可选）">
+        <input id="taskCaps" placeholder="所需能力 (逗号分隔)" value="code_review">
+        <select id="taskPriority">
+          <option value="normal">普通</option>
+          <option value="high">高优先</option>
+          <option value="low">低优先</option>
+        </select>
+        <button onclick="createTask()">创建</button>
+        <button class="secondary" onclick="toggleTaskForm()">✕</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = "http://localhost:8765";
+const AVATARS = {
+  Yang: "#ff7a45", Claude: "#1677ff", Cursor: "#722ed1",
+  Codex: "#13c2c2", OpenClaw: "#fa8c16", System: "#666"
+};
+
+let lastTs = 0;
+let shownMsgs = new Set();
+let agentCache = [];
+let taskCache = [];
+let taskFormVisible = false;
+let notifEnabled = true;
+let autoScroll = true;
+let userScrolledUp = false;
+let unreadCount = 0;
+const SCROLL_THRESHOLD = 60; // px from bottom to consider "at bottom"
+
+// DOM refs
+const msgEl = document.getElementById("messages");
+const jumpBtn = document.getElementById("jumpBottom");
+
+function msgHash(m) { return `${m.ts}-${m.sender}-${m.type}-${m.content.length}`; }
+
+function isAtBottom() {
+  return msgEl.scrollHeight - msgEl.scrollTop - msgEl.clientHeight < SCROLL_THRESHOLD;
+}
+
+function scrollToBottom() {
+  msgEl.scrollTop = msgEl.scrollHeight;
+  userScrolledUp = false;
+  unreadCount = 0;
+  updateJumpButton();
+}
+
+function updateJumpButton() {
+  const show = userScrolledUp;
+  jumpBtn.style.display = show ? "flex" : "none";
+  jumpBtn.style.alignItems = "center";
+  jumpBtn.style.justifyContent = "center";
+  if (unreadCount > 0) {
+    jumpBtn.classList.add("hasUnread");
+    jumpBtn.textContent = unreadCount < 100 ? unreadCount : "…";
+  } else {
+    jumpBtn.classList.remove("hasUnread");
+    jumpBtn.textContent = "↓";
+  }
+}
+
+msgEl.addEventListener("scroll", () => {
+  const wasScrolledUp = userScrolledUp;
+  userScrolledUp = !isAtBottom();
+  if (userScrolledUp !== wasScrolledUp) updateJumpButton();
+  if (!userScrolledUp) unreadCount = 0;
+});
+
+function formatTime(ts) {
+  const d = new Date(ts * 1000);
+  return d.getHours().toString().padStart(2,'0') + ":" +
+         d.getMinutes().toString().padStart(2,'0');
+}
+
+function escapeHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function truncateText(text, maxLen) {
+  if (text.length <= maxLen) return { html: escapeHtml(text), truncated: false };
+  return { html: escapeHtml(text.slice(0, maxLen)) + "…", truncated: true };
+}
+
+// ── Render message by type ──────────────────
+
+function renderMsg(m) {
+  const hash = msgHash(m);
+  if (shownMsgs.has(hash)) return;
+  shownMsgs.add(hash);
+  if (shownMsgs.size > 400) shownMsgs.clear();
+
+  const type = m.type || "chat";
+  const meta = m.meta || {};
+
+  // Notify for task_create
+  if (type === "task_create" && notifEnabled && document.hidden && m.sender !== document.getElementById("senderSelect").value) {
+    sendNotification(meta.title || m.content, meta.description || "");
+  }
+
+  if (type === "chat" || !type || type === "system") {
+    renderChatMsg(m, type);
+  } else if (type === "agent_register") {
+    renderAgentRegister(m, meta);
+  } else if (type === "agent_offline") {
+    renderAgentOffline(m);
+  } else if (type === "task_create") {
+    renderTaskCreate(m, meta);
+  } else if (type === "task_claim") {
+    renderTaskClaim(m, meta);
+  } else if (type === "task_complete") {
+    renderTaskComplete(m, meta);
+  } else if (type === "task_fail") {
+    renderTaskFail(m, meta);
+  } else if (type === "task_cancel") {
+    renderTaskCancel(m, meta);
+  } else if (type === "task_comment") {
+    renderTaskComment(m, meta);
+  }
+
+  // Scroll or track unread
+  if (autoScroll && !userScrolledUp) {
+    scrollToBottom();
+  } else if (userScrolledUp) {
+    unreadCount++;
+    updateJumpButton();
+  }
+}
+
+function renderChatMsg(m, type) {
+  const div = document.createElement("div");
+  const sender = m.sender || "?";
+  const isMe = sender === document.getElementById("senderSelect").value || sender === "Yang";
+  const isSys = type === "system" || sender === "System";
+  div.className = `msg ${isSys ? "system" : isMe ? "me" : "agent"}`;
+
+  const avatar = AVATARS[sender] || "#666";
+  const initial = sender[0];
+  div.innerHTML = `
+    <div class="msg-sender">
+      ${!isSys ? `<span class="avatar" style="background:${avatar}">${initial}</span>` : ""}
+      <span>${escapeHtml(sender)}</span>
+    </div>
+    <div class="msg-bubble">${escapeHtml(m.content || "")}</div>
+    <div class="msg-time">${formatTime(m.ts)}</div>
+  `;
+  msgEl.appendChild(div);
+}
+
+function renderAgentRegister(m, meta) {
+  const caps = (meta.capabilities || []).map(c => `<span class="cap-badge">${escapeHtml(c)}</span>`).join("");
+  const div = document.createElement("div");
+  div.className = "msg agent-register system";
+  div.innerHTML = `
+    <div class="msg-bubble">+ ${escapeHtml(m.content)} <span class="event-caps">${caps}</span></div>
+    <div class="msg-time">${formatTime(m.ts)}</div>
+  `;
+  msgEl.appendChild(div);
+}
+
+function renderAgentOffline(m) {
+  const div = document.createElement("div");
+  div.className = "msg agent-offline system";
+  div.innerHTML = `<div class="msg-bubble">- ${escapeHtml(m.content)}</div><div class="msg-time">${formatTime(m.ts)}</div>`;
+  msgEl.appendChild(div);
+}
+
+function renderTaskCreate(m, meta) {
+  const caps = (meta.required_capabilities || []).map(c => `<span class="cap-badge">${escapeHtml(c)}</span>`).join("");
+  const priority = meta.priority || "normal";
+  const desc = meta.description || "";
+  const descResult = truncateText(desc, 200);
+  const taskId = meta.task_id || "";
+
+  const div = document.createElement("div");
+  div.className = "msg task-create card";
+  div.id = "task-msg-" + taskId;
+  div.innerHTML = `
+    <div class="msg-sender"><span>${escapeHtml(m.sender)}</span></div>
+    <div class="msg-bubble">
+      <div class="task-card-title">${escapeHtml(meta.title || m.content)}</div>
+      ${descResult.html ? `
+        <div class="task-card-desc${descResult.truncated ? ' truncated' : ''}">${descResult.html}</div>
+        ${descResult.truncated ? '<span class="task-card-toggle" onclick="this.previousElementSibling.classList.toggle(\'truncated\');this.textContent=this.textContent.includes(\'展开\')?\'收起\':\'展开全文\'">展开全文</span>' : ''}
+      ` : ""}
+      <div class="task-card-meta">
+        <span class="task-card-badge ${priority}">${priority}</span>
+        <span>需要: ${caps || '无'}</span>
+        <span style="margin-left:auto">${formatTime(m.ts)}</span>
+      </div>
+    </div>
+  `;
+  msgEl.appendChild(div);
+}
+
+function renderTaskClaim(m, meta) {
+  const div = document.createElement("div");
+  div.className = "msg task-claim system";
+  div.innerHTML = `<div class="msg-bubble">${escapeHtml(m.content)}</div><div class="msg-time">${formatTime(m.ts)}</div>`;
+  msgEl.appendChild(div);
+}
+
+function renderTaskComplete(m, meta) {
+  const div = document.createElement("div");
+  div.className = "msg task-complete card";
+  div.id = "task-msg-" + (meta.task_id || "");
+  const result = meta.result || "";
+  const resultDesc = truncateText(result, 200);
+  div.innerHTML = `
+    <div class="msg-sender"><span>${escapeHtml(m.sender)}</span></div>
+    <div class="msg-bubble">
+      <div class="task-card-title">${escapeHtml(meta.title || m.content)}</div>
+      ${resultDesc.html ? `
+        <div class="task-card-result${resultDesc.truncated ? ' truncated' : ''}">${resultDesc.html}</div>
+        ${resultDesc.truncated ? '<span class="task-card-toggle" onclick="this.previousElementSibling.classList.toggle(\'truncated\');this.textContent=this.textContent.includes(\'展开\')?\'收起\':\'展开全文\'">展开全文</span>' : ''}
+      ` : ""}
+      <div class="task-card-meta"><span style="margin-left:auto">${formatTime(m.ts)}</span></div>
+    </div>
+  `;
+  msgEl.appendChild(div);
+}
+
+function renderTaskFail(m, meta) {
+  const div = document.createElement("div");
+  div.className = "msg task-fail card";
+  div.id = "task-msg-" + (meta.task_id || "");
+  div.innerHTML = `
+    <div class="msg-sender"><span>${escapeHtml(m.sender)}</span></div>
+    <div class="msg-bubble">
+      <div class="task-card-title">${escapeHtml(meta.title || m.content)}</div>
+      ${meta.error ? `<div class="task-card-error">${escapeHtml(meta.error)}</div>` : ""}
+      <div class="task-card-meta"><span style="margin-left:auto">${formatTime(m.ts)}</span></div>
+    </div>
+  `;
+  msgEl.appendChild(div);
+}
+
+function renderTaskCancel(m, meta) {
+  const div = document.createElement("div");
+  div.className = "msg task-cancel system";
+  div.innerHTML = `<div class="msg-bubble">${escapeHtml(m.content)}</div><div class="msg-time">${formatTime(m.ts)}</div>`;
+  msgEl.appendChild(div);
+}
+
+function renderTaskComment(m, meta) {
+  const div = document.createElement("div");
+  div.className = "msg task-comment card";
+  div.innerHTML = `
+    <div class="msg-sender"><span>${escapeHtml(m.sender)}</span></div>
+    <div class="msg-bubble">
+      ${escapeHtml(meta.comment || m.content)}
+      <div class="task-card-meta"><span style="margin-left:auto">${formatTime(m.ts)}</span></div>
+    </div>
+  `;
+  msgEl.appendChild(div);
+}
+
+// ── Notifications ──────────────────────────────
+
+function sendNotification(title, body) {
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "granted") {
+    new Notification(title, { body: body || "", icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>" });
+  } else if (Notification.permission !== "denied") {
+    Notification.requestPermission();
+  }
+}
+
+function toggleNotif() {
+  notifEnabled = !notifEnabled;
+  const btn = document.getElementById("notifToggle");
+  btn.classList.toggle("active", notifEnabled);
+  if (notifEnabled && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+}
+
+function toggleAutoScroll() {
+  autoScroll = !autoScroll;
+  document.getElementById("autoScrollToggle").classList.toggle("active", autoScroll);
+  if (autoScroll) scrollToBottom();
+}
+
+// ── Sidebar click → jump to task card ───────────
+
+function jumpToTask(taskId) {
+  // Search for task card in messages
+  const card = document.getElementById("task-msg-" + taskId);
+  if (card) {
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    card.classList.add("highlight");
+    setTimeout(() => card.classList.remove("highlight"), 2000);
+  }
+  // Also try to find by task_claim etc
+  const cards = msgEl.querySelectorAll("[id*='task-msg-" + taskId + "']");
+  if (cards.length === 0 && !card) {
+    // Task not yet rendered in messages, just scroll to bottom
+    scrollToBottom();
+  }
+}
+
+// ── Polling ──────────────────────────────────
+
+async function pollMessages() {
+  try {
+    const resp = await fetch(`${API}/api/messages?since=${lastTs}`);
+    const msgs = await resp.json();
+    if (msgs.length) {
+      for (const m of msgs) renderMsg(m);
+      lastTs = Math.max(...msgs.map(m => m.ts));
+    }
+  } catch(e) {}
+}
+
+function humanTimeAgo(ts) {
+  const sec = Math.max(0, (Date.now()/1000) - ts);
+  if (sec < 60) return '刚刚';
+  if (sec < 3600) return Math.floor(sec/60) + 'm前';
+  return Math.floor(sec/3600) + 'h前';
+}
+
+async function pollSidebar() {
+  try {
+    const aResp = await fetch(`${API}/api/agents`);
+    agentCache = await aResp.json();
+    renderAgentList(agentCache);
+    const tResp = await fetch(`${API}/api/tasks`);
+    taskCache = await tResp.json();
+    renderTaskList(taskCache);
+    const online = agentCache.filter(a => a.status !== 'offline').length;
+    document.getElementById("onlineCount").textContent = `在线: ${online}`;
+  } catch(e) {}
+}
+
+function renderAgentList(agents) {
+  const el = document.getElementById("agentList");
+  document.getElementById("agentCount").textContent = agents.length;
+  if (!agents.length) {
+    el.innerHTML = '<div class="sidebar-empty">等待 agent 接入...</div>';
+    return;
+  }
+  let html = '';
+  for (const a of agents) {
+    const caps = (a.capabilities || []).map(c => `<span class="cap-badge">${escapeHtml(c)}</span>`).join("");
+    const status = a.status || 'offline';
+    let taskLine = '';
+    if (status === 'busy' && a.current_task_id) {
+      const task = taskCache.find(t => t.task_id === a.current_task_id);
+      taskLine = `<div class="agent-task">↳ ${task ? task.title : a.current_task_id}</div>`;
+    }
+    html += `
+      <div class="agent-card">
+        <span class="agent-dot ${status}"></span>
+        <div class="agent-info">
+          <div class="agent-name ${status === 'offline' ? 'offline' : ''}">${escapeHtml(a.name)}</div>
+          ${taskLine}
+          <div class="agent-caps">${caps || '<span style="font-size:10px;color:#555">无能力声明</span>'}</div>
+        </div>
+        <span style="font-size:10px;color:#555;flex-shrink:0">${humanTimeAgo(a.last_seen)}</span>
+      </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderTaskList(tasks) {
+  const el = document.getElementById("taskList");
+  document.getElementById("taskCount").textContent = tasks.length;
+  if (!tasks.length) {
+    el.innerHTML = '<div class="sidebar-empty">暂无任务</div>';
+    return;
+  }
+  const active = tasks.filter(t => t.status === 'pending' || t.status === 'claimed');
+  const done = tasks.filter(t => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled').slice(-5);
+  const shown = [...active, ...done];
+  let html = '';
+  for (const t of shown) {
+    const caps = (t.required_capabilities || []).map(c => `<span class="cap-badge">${escapeHtml(c)}</span>`).join("");
+    const agent = t.claimed_by ? (agentCache.find(a => a.agent_id === t.claimed_by) || {}).name || t.claimed_by : '';
+    const statusLabel = {pending: '待领取', claimed: agent ? agent + ' 执行中' : '执行中', completed: '已完成', failed: '失败', cancelled: '已取消'}[t.status] || t.status;
+    const desc = (t.description || "").slice(0, 80);
+    html += `
+      <div class="task-card-sidebar ${t.status}" onclick="jumpToTask('${t.task_id}')" title="${escapeHtml(t.description || '')}">
+        <div class="task-sb-title">${escapeHtml(t.title)}</div>
+        <div class="task-sb-meta">
+          <span>${statusLabel}</span>
+          <span>${t.priority || 'normal'}</span>
+          <span>${t.creator || ''}</span>
+        </div>
+        ${desc ? `<div class="task-sb-desc">${escapeHtml(desc)}</div>` : ''}
+        <div class="task-sb-caps">${caps}</div>
+      </div>`;
+  }
+  if (tasks.length > shown.length) {
+    html += `<div class="sidebar-empty">还有 ${tasks.length - shown.length} 个已完成任务</div>`;
+  }
+  el.innerHTML = html;
+}
+
+// ── Send / Create ────────────────────────────
+
+async function sendMsg() {
+  const input = document.getElementById("chatInput");
+  const content = input.value.trim();
+  if (!content) return;
+  const sender = document.getElementById("senderSelect").value;
+  try {
+    await fetch(`${API}/api/send`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ sender, content })
+    });
+  } catch(e) { alert("发送失败，服务器在线吗？"); }
+  input.value = "";
+  input.focus();
+}
+
+function toggleTaskForm() {
+  taskFormVisible = !taskFormVisible;
+  document.getElementById("inputChat").style.display = taskFormVisible ? "none" : "flex";
+  document.getElementById("inputTask").style.display = taskFormVisible ? "flex" : "none";
+  if (!taskFormVisible) {
+    document.getElementById("chatInput").focus();
+  } else {
+    document.getElementById("taskTitle").focus();
+  }
+}
+
+async function createTask() {
+  const title = document.getElementById("taskTitle").value.trim();
+  if (!title) { alert("请输入任务标题"); return; }
+  const description = document.getElementById("taskDesc").value.trim();
+  const capsRaw = document.getElementById("taskCaps").value.trim();
+  const required_capabilities = capsRaw ? capsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+  const priority = document.getElementById("taskPriority").value || "normal";
+  const creator = document.getElementById("senderSelect").value;
+
+  try {
+    await fetch(`${API}/api/tasks`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ title, description, required_capabilities, priority, creator })
+    });
+  } catch(e) { alert("创建失败，服务器在线吗？"); return; }
+
+  document.getElementById("taskTitle").value = "";
+  document.getElementById("taskDesc").value = "";
+  document.getElementById("taskCaps").value = "code_review";
+  toggleTaskForm();
+}
+
+// ── Init ──────────────────────────────────────
+
+if ("Notification" in window && Notification.permission === "default") {
+  // Don't request on load, wait for user interaction
+}
+
+setInterval(pollMessages, 600);
+setInterval(pollSidebar, 3000);
+pollMessages();
+pollSidebar();
+</script>
+</body>
+</html>
