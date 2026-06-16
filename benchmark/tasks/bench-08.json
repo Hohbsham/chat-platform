@@ -1,0 +1,22 @@
+{
+  "id": "bench-08",
+  "category": "concurrency",
+  "weight": 1.5,
+  "name": "Concurrent Agent Load",
+  "description": "Multiple agents should not conflict when claiming different tasks simultaneously.",
+  "task": {
+    "title": "Quick status ping",
+    "description": "Respond with a single word: pong.",
+    "required_capabilities": [],
+    "priority": "high",
+    "broadcast": true
+  },
+  "expected": {
+    "min_responses": 2,
+    "max_latency_s": 30,
+    "required_keywords": [
+      "pong"
+    ],
+    "forbidden_keywords": []
+  }
+}

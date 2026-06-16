@@ -1,0 +1,21 @@
+{
+  "id": "bench-02",
+  "name": "Multi-Round Context Retention",
+  "description": "Agent must remember context from previous turns in a multi-round conversation.",
+  "task": {
+    "title": "Context memory test: remember the secret word",
+    "description": "Round 1: I will tell you a secret word. Round 2: You must recall it. The secret word is: CASCADING-WATERFALL-42",
+    "required_capabilities": ["chat"],
+    "priority": "high",
+    "max_rounds": 2,
+    "broadcast": false
+  },
+  "expected": {
+    "min_responses": 1,
+    "max_latency_s": 60,
+    "required_keywords": ["CASCADING-WATERFALL-42"],
+    "forbidden_keywords": []
+  },
+  "category": "context",
+  "weight": 1.5
+}

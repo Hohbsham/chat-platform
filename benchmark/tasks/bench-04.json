@@ -1,0 +1,25 @@
+{
+  "id": "bench-04",
+  "category": "dependency",
+  "weight": 2.0,
+  "name": "Task Dependency Chain Timeout",
+  "description": "Agent should not claim a task whose dependency is not yet completed.",
+  "task": {
+    "title": "Deploy to production",
+    "description": "Deploy the reviewed code to production servers.",
+    "required_capabilities": [
+      "shell_exec"
+    ],
+    "priority": "normal",
+    "context": [
+      "task-nonexistent-99999"
+    ],
+    "broadcast": false
+  },
+  "expected": {
+    "min_responses": 0,
+    "max_latency_s": 30,
+    "required_keywords": [],
+    "should_not_claim": true
+  }
+}

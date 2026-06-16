@@ -1,0 +1,23 @@
+{
+  "id": "bench-10",
+  "category": "robustness",
+  "weight": 1.5,
+  "name": "Agent Offline Recovery",
+  "description": "Tasks claimed by an agent that goes offline should be released back to pending.",
+  "task": {
+    "title": "Long-running analysis task",
+    "description": "Analyze all system logs from the past year.",
+    "required_capabilities": [
+      "code_review"
+    ],
+    "priority": "normal",
+    "broadcast": false
+  },
+  "expected": {
+    "min_responses": 0,
+    "max_latency_s": 90,
+    "required_keywords": [],
+    "forbidden_keywords": [],
+    "test_offline_recovery": true
+  }
+}

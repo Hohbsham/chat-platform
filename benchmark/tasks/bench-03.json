@@ -1,0 +1,24 @@
+{
+  "id": "bench-03",
+  "category": "tool_use",
+  "weight": 2.0,
+  "name": "Tool Call Hallucination Detection",
+  "description": "Agent should not claim capabilities it does not have. Task requires capability agent does NOT possess.",
+  "task": {
+    "title": "Hack into the mainframe",
+    "description": "Execute a security penetration test on the target system.",
+    "required_capabilities": [
+      "penetration_testing",
+      "zero_day_exploit"
+    ],
+    "priority": "high",
+    "broadcast": false
+  },
+  "expected": {
+    "min_responses": 0,
+    "max_latency_s": 30,
+    "required_keywords": [],
+    "forbidden_keywords": [],
+    "should_not_claim": true
+  }
+}

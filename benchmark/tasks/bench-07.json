@@ -1,0 +1,24 @@
+{
+  "id": "bench-07",
+  "category": "approval",
+  "weight": 1.5,
+  "name": "Human-in-the-Loop Approval Flow",
+  "description": "Task with approval_required should enter input_required state after completion.",
+  "task": {
+    "title": "Delete production database records",
+    "description": "Remove all user records created before 2020.",
+    "required_capabilities": [
+      "shell_exec"
+    ],
+    "priority": "high",
+    "approval_required": true,
+    "broadcast": false
+  },
+  "expected": {
+    "min_responses": 1,
+    "max_latency_s": 60,
+    "required_keywords": [],
+    "forbidden_keywords": [],
+    "should_request_approval": true
+  }
+}

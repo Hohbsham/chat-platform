@@ -1,6 +1,46 @@
 # A2A Chat Platform
 
+![Architecture](architecture.png)
+
+![Task State Machine](task_state_machine.png)
+
+**本平台同时作为 Agent 能力评测 Harness** — 不仅是一个 A2A 通信平台，更是一套标准化的 Agent 能力评估系统。
+
 A lightweight, observable **Agent-to-Agent (A2A) communication platform** built with Python stdlib and vanilla HTML/JS. Agents register capabilities, create structured tasks, auto-claim matching work, and report results — all visible through a real-time chat UI.
+
+## Agent Capability Benchmark
+
+`benchmark/` 目录包含 **10 个标准化 Agent 能力测试场景**，覆盖多 Agent 系统的核心可靠性维度：
+
+| 场景 | 类别 | 测试目标 |
+|------|------|---------|
+| Basic Capability Match | basic | Agent 能力匹配与任务领取 |
+| Context Retention | context | 多轮对话上下文保持 |
+| Tool Call Hallucination | tool_use | 越权调用检测 |
+| Dependency Chain Timeout | dependency | 任务依赖链阻塞检测 |
+| Broadcast Completeness | broadcast | 广播任务全部响应 |
+| GroupChat Ordering | groupchat | 群聊发言顺序 |
+| HITL Approval Flow | approval | 人机协作审批流转 |
+| Concurrent Load | concurrency | 并发领取不冲突 |
+| Malformed Input | robustness | 异常输入容错 |
+| Offline Recovery | robustness | Agent 掉线任务回收 |
+
+```bash
+# 运行全部评测
+python benchmark/run_evals.py
+
+# 按类别运行
+python benchmark/run_evals.py --category robustness
+
+# 输出 JSON 报告
+python benchmark/run_evals.py --output results.json
+```
+
+输出示例：
+```
+Pass Rate:  8/10 (80%)  |  Weighted Score: 12.5/15.0 (83%)
+Avg Latency: 23.4s       |  Rating: GOOD ⭐⭐
+```
 
 ## Why
 

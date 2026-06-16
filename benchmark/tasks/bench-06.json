@@ -1,0 +1,23 @@
+{
+  "id": "bench-06",
+  "category": "groupchat",
+  "weight": 1.5,
+  "name": "GroupChat Speaker Ordering",
+  "description": "In a GroupChat task, speakers should follow the queue order.",
+  "task": {
+    "title": "Roundtable: propose one improvement to the platform",
+    "description": "Each agent takes a turn proposing one improvement.",
+    "required_capabilities": [
+      "chat"
+    ],
+    "priority": "normal",
+    "max_rounds": 3,
+    "broadcast": false
+  },
+  "expected": {
+    "min_responses": 1,
+    "max_latency_s": 60,
+    "required_keywords": [],
+    "forbidden_keywords": []
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "bench-09",
+  "category": "robustness",
+  "weight": 1.0,
+  "name": "Malformed Input Handling",
+  "description": "System should handle tasks with empty descriptions and no capabilities gracefully.",
+  "task": {
+    "title": "",
+    "description": "",
+    "required_capabilities": [],
+    "priority": "low",
+    "broadcast": false
+  },
+  "expected": {
+    "min_responses": 0,
+    "max_latency_s": 20,
+    "required_keywords": [],
+    "forbidden_keywords": [],
+    "expect_validation_error": true
+  }
+}
