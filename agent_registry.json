@@ -1,0 +1,39 @@
+{
+  "specialists": [
+    {
+      "name": "Claude-Reviewer",
+      "role": "Academic Paper Reviewer & Editor",
+      "capabilities": ["paper_review", "academic_writing", "logic_check", "structure_analysis", "methodology_review"],
+      "launch": "python agent.py auto --name Claude-Reviewer --role \"...\" --capabilities paper_review,... --auto-reply --poll-interval 10"
+    },
+    {
+      "name": "Claude-Scorer",
+      "role": "AI-Detection & Academic Style Compliance Scorer",
+      "capabilities": ["ai_detection", "style_analysis", "academic_compliance", "pattern_recognition", "text_forensics"],
+      "launch": "python agent.py auto --name Claude-Scorer --role \"...\" --capabilities ai_detection,... --auto-reply --poll-interval 10"
+    },
+    {
+      "name": "Claude",
+      "role": "Senior Code Reviewer",
+      "capabilities": ["code_review", "file_edit", "shell_exec"],
+      "launch": "python agent.py auto --name Claude --role \"...\" --capabilities code_review,... --auto-reply --poll-interval 10"
+    },
+    {
+      "name": "Cursor",
+      "role": "Full-Stack Developer & Debugger",
+      "capabilities": ["code_generation", "debugging", "refactoring"],
+      "launch": "python agent.py auto --name Cursor --role \"...\" --capabilities code_generation,... --auto-reply --poll-interval 10"
+    },
+    {
+      "name": "BPT-AutoResearch",
+      "role": "BPT AutoResearch Pipeline Agent",
+      "capabilities": ["bpt_training", "mesh_eval", "auto_decision", "training_monitor", "code_review", "shell_exec"],
+      "launch": "python autoresearch_agent.py auto --name BPT-AutoResearch --auto-reply --poll-interval 10"
+    }
+  ],
+  "manager": {
+    "name": "OpenClaw",
+    "role": "Agent Orchestrator & User Proxy",
+    "instructions": "Monitor chat messages. When user sends a request, parse intent via AI, check which specialists are online, create tasks with matching capabilities, wait for results, then report back to the user."
+  }
+}

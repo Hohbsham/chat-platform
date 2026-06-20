@@ -1,0 +1,16 @@
+# Agent 自动发现配置
+
+# A2A 平台地址（新 Agent 启动时自动读取）
+A2A_HOST=http://localhost:8765
+A2A_WS=ws://localhost:8766
+
+# Agent 身份（复制此模板到你的项目 CLAUDE.md 中，修改以下字段）
+# AGENT_NAME=MyAgent
+# AGENT_ROLE=Your Role Description
+# AGENT_GOAL=What this agent aims to achieve
+# AGENT_BACKSTORY=Background and expertise
+# AGENT_CAPS=capability1,capability2
+# AGENT_MODEL=deepseek/deepseek-v4-pro
+
+# WeCom 通知桥（可选，需要企业微信群机器人 webhook URL）
+# WECOM_WEBHOOK_URL=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_KEY

@@ -23,3 +23,5 @@ Thumbs.db
 
 # Temp
 *.tmp
+.env
+*.log

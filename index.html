@@ -2,16 +2,24 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#1677ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AgentChat">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <title>A2A Chat v2 — Agent 群聊</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #1e1e1e; color: #d4d4d4; display: flex; height: 100vh; }
 .app { display: flex; width: 100%; }
-.sidebar { width: 280px; min-width: 280px; background: #1a1a1a; border-right: 1px solid #2d2d2d; display: flex; flex-direction: column; overflow: hidden; }
-.sidebar-section { border-bottom: 1px solid #252525; }
-.sidebar-header { padding: 10px 14px; font-size: 12px; font-weight: bold; color: #888; text-transform: uppercase; display: flex; justify-content: space-between; }
-.sidebar-scroll { flex: 1; overflow-y: auto; padding: 4px 8px 8px; }
+.sidebar { width: 280px; min-width: 280px; background: #1a1a1a; border-right: 1px solid #2d2d2d; display: flex; flex-direction: column; height: 100vh; }
+.sidebar-section { border-bottom: 1px solid #252525; overflow: hidden; }
+.sidebar-section.agents-section { flex: 0 0 auto; max-height: 40%; display: flex; flex-direction: column; }
+.sidebar-section.tasks-section { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.sidebar-header { padding: 10px 14px; font-size: 12px; font-weight: bold; color: #888; text-transform: uppercase; display: flex; justify-content: space-between; flex-shrink: 0; }
+.sidebar-scroll { flex: 1; overflow-y: auto; padding: 4px 8px 8px; min-height: 0; }
 .sidebar-empty { font-size: 11px; color: #444; text-align: center; padding: 16px 0; }
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .header { background: #252525; padding: 10px 16px; font-size: 15px; font-weight: bold; border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; }
@@ -47,6 +55,7 @@ body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #1
 
 /* Messages */
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pulse { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
 .msg { display: flex; flex-direction: column; max-width: 82%; animation: fadeIn 0.3s ease; }
 .msg.me { align-self: flex-end; } .msg.agent { align-self: flex-start; } .msg.system { align-self: center; max-width: 90%; }
 .msg.card { align-self: stretch; max-width: 100%; }
@@ -118,6 +127,35 @@ body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #1
 #taskPriority { width: 70px; }
 .check-label { display: flex; align-items: center; gap: 3px; font-size: 11px; color: #999; cursor: pointer; white-space: nowrap; }
 .check-label input { accent-color: #1677ff; width: 14px; height: 14px; }
+
+/* Thinking block */
+.thinking-block { margin: 8px 0; background: #1a1a2e; border: 1px solid #b37feb33; border-radius: 8px; padding: 8px 12px; }
+.thinking-block summary { color: #b37feb; font-size: 12px; cursor: pointer; user-select: none; }
+.thinking-block summary:hover { color: #d4a5ff; }
+.thinking-content { color: #999; font-size: 12px; line-height: 1.6; margin-top: 6px; padding-top: 6px; border-top: 1px solid #333; white-space: pre-wrap; max-height: 400px; overflow-y: auto; }
+
+/* Fold toggle */
+.fold-toggle { color: #1677ff; font-size: 12px; cursor: pointer; text-decoration: none; }
+.fold-toggle:hover { text-decoration: underline; }
+
+/* ── Mobile responsive ── */
+@media (max-width: 640px) {
+  .app { flex-direction: column; }
+  .sidebar { width: 100%; min-width: 100%; max-height: 35vh; border-right: none; border-bottom: 1px solid #2d2d2d; }
+  .sidebar-section.agents-section { max-height: 30%; }
+  .main { height: 65vh; }
+  .msg { max-width: 94%; }
+  .header { padding: 8px 10px; font-size: 13px; }
+  .messages { padding: 8px 10px; gap: 6px; }
+  .msg-bubble { font-size: 13px; padding: 8px 10px; }
+  .input-area { padding: 8px 10px; }
+  .input-chat { gap: 4px; }
+  #chatInput { font-size: 13px; padding: 8px 10px; width: 100%; }
+  .input-chat button { font-size: 12px; padding: 6px 8px; white-space: nowrap; }
+  .input-task { flex-direction: column; gap: 4px; }
+  #taskTitle, #taskDesc, #taskCaps, #taskContext { width: 100%; }
+  .task-card-sb { padding: 5px 4px; }
+}
 </style>
 </head>
 <body>
@@ -125,12 +163,14 @@ body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #1
 <div class="app">
 <!-- Sidebar -->
 <div class="sidebar">
-  <div class="sidebar-section"><div class="sidebar-header"><span>AGENTS</span><span class="count" id="agentCount">0</span></div>
-    <div class="sidebar-scroll" id="agentList"><div class="sidebar-empty">等待 agent 接入...</div></div></div>
-  <div class="sidebar-section" style="flex:1;display:flex;flex-direction:column;">
+  <div class="sidebar-section agents-section">
+    <div class="sidebar-header"><span>AGENTS</span><span class="count" id="agentCount">0</span></div>
+    <div class="sidebar-scroll" id="agentList"><div class="sidebar-empty">等待 agent 接入...</div></div>
+  </div>
+  <div class="sidebar-section tasks-section">
     <div class="sidebar-header"><span>TASKS</span><span class="count" id="taskCount">0</span></div>
-    <div class="sidebar-scroll" style="flex:1;" id="taskList"><div class="sidebar-empty">暂无任务</div></div>
-    <div style="padding:0 8px 8px;"><button id="newTaskBtn" onclick="toggleTaskForm()" style="width:100%;padding:6px;background:#1677ff22;color:#1677ff;border:1px dashed #1677ff44;border-radius:6px;font-size:12px;cursor:pointer;">+ 创建任务</button></div>
+    <div class="sidebar-scroll" id="taskList"><div class="sidebar-empty">暂无任务</div></div>
+    <div style="padding:0 8px 8px;flex-shrink:0;"><button id="newTaskBtn" onclick="toggleTaskForm()" style="width:100%;padding:6px;background:#1677ff22;color:#1677ff;border:1px dashed #1677ff44;border-radius:6px;font-size:12px;cursor:pointer;">+ 创建任务</button></div>
   </div>
 </div>
 
@@ -300,12 +340,14 @@ function renderMsg(m) {
     case 'agent_offline': renderAgentLeave(m); break;
     case 'task_create': renderTaskCreate(m, meta); break;
     case 'task_claim': renderTaskClaim(m); break;
+    case 'task_working': renderTaskWorking(m, meta); break;
     case 'task_complete': renderTaskComplete(m, meta); break;
     case 'task_fail': renderTaskFail(m, meta); break;
     case 'task_cancel': renderTaskCancel(m, meta); break;
     case 'broadcast_response': renderBroadcastResp(m, meta); break;
     case 'approval_request': renderApprovalReq(m, meta); break;
     case 'task_comment': renderComment(m, meta); break;
+    case 'agent_mention': renderAgentMention(m, meta); break;
   }
   msgEl.scrollTop = msgEl.scrollHeight;
 }
@@ -365,9 +407,33 @@ function renderTaskClaim(m) {
   msgEl.innerHTML += `<div class="msg system task-claim"><div class="msg-bubble">${esc(m.content)}</div><div class="msg-time">${fmt(m.ts)}</div></div>`;
 }
 
-function renderTaskComplete(m, meta) {
-  const result = (meta.result||'').slice(0, 400);
-  makeMsg("task-complete card", m.sender, `<div class="card-title">${esc(meta.title||m.content)}</div>${result?`<div class="card-result">${esc(result)}</div>`:''}`, m.ts).id = "task-msg-"+(meta.task_id||'');
+let _workingTimers = {};
+function renderTaskWorking(m, meta) {
+  const taskId = meta.task_id||'';
+  // Remove previous working indicator for same task+agent
+  const key = taskId + (meta.agent_name||'');
+  if (_workingTimers[key]) { clearTimeout(_workingTimers[key]); const old = document.getElementById('working-'+key); if(old) old.remove(); }
+
+  const div = document.createElement('div');
+  div.className = 'msg system';
+  div.id = 'working-' + key;
+  div.innerHTML = `<div class="msg-bubble" style="color:#b37feb;font-size:12px;animation:pulse 1.5s ease-in-out infinite;">⚙ ${esc(m.content)}</div><div class="msg-time">${fmt(m.ts)}</div>`;
+  msgEl.appendChild(div);
+  msgEl.scrollTop = msgEl.scrollHeight;
+  // Auto-remove after 90s
+  _workingTimers[key] = setTimeout(() => { const el = document.getElementById('working-'+key); if(el) el.remove(); }, 90000);
+}
+
+function renderAgentMention(m, meta) {
+  const from = meta.from||m.sender;
+  const target = meta.target||'';
+  const content = meta.content||m.content||'';
+  const avatar = AVATARS[from]||'#666';
+  msgEl.innerHTML += `<div class="msg system" style="align-self:flex-start;max-width:85%">
+    <div class="msg-sender"><span class="avatar" style="background:${avatar}">${esc(from)[0]}</span><span>${esc(from)}</span><span style="color:#b37feb;font-size:11px;"> → @${esc(target)}</span></div>
+    <div class="msg-bubble" style="background:#252525;border-left:3px solid #b37feb;border-radius:8px;padding:8px 12px;">${esc(content)}</div>
+    <div class="msg-time">${fmt(m.ts)}</div>
+  </div>`;
 }
 
 function renderTaskFail(m, meta) {
@@ -380,7 +446,65 @@ function renderTaskCancel(m, meta) {
 
 function renderBroadcastResp(m, meta) {
   const count = meta.response_count||0;
-  makeMsg("broadcast-response card", m.sender, `<span class="card-badge broadcast">📢 回复 #${count}</span> → ${esc(meta.title||'')}<div class="card-result">${esc(meta.result||m.content)}</div>`, m.ts).id = "task-msg-"+(meta.task_id||'');
+  const content = meta.result||m.content||'';
+  makeMsg("broadcast-response card", m.sender,
+    `<span class="card-badge broadcast">📢 回复 #${count}</span> → ${esc(meta.title||'')}
+     <div class="card-result">${renderRichContent(content)}</div>`, m.ts
+  ).id = "task-msg-"+(meta.task_id||'');
+}
+
+// ── Rich content rendering (thinking + long text folding) ──
+function renderRichContent(text) {
+  if (!text) return '';
+  // Parse thinking section
+  const thinkMatch = text.match(/<!--thinking-->([\s\S]*?)<!--\/thinking-->/);
+  let html = '';
+  let displayText = text;
+  if (thinkMatch) {
+    const thinking = thinkMatch[1].trim();
+    displayText = text.replace(/<!--thinking-->[\s\S]*?<!--\/thinking-->\n*/, '');
+    html += `<details class="thinking-block" ${thinking.length < 500 ? 'open' : ''}>
+      <summary>🧠 思考过程 (${thinking.length} 字)</summary>
+      <div class="thinking-content">${esc(thinking)}</div>
+    </details>`;
+  }
+  // Long text folding
+  const maxLen = 350;
+  if (displayText.length > maxLen) {
+    const truncated = esc(displayText.slice(0, maxLen));
+    const full = esc(displayText);
+    const id = 'fold-' + Math.random().toString(36).slice(2,8);
+    html += `<div id="${id}">
+      <span class="folded-text">${truncated}...</span>
+      <span class="folded-full" style="display:none">${full}</span>
+      <a href="javascript:void(0)" onclick="toggleFold('${id}')" class="fold-toggle">展开全文 (${displayText.length}字)</a>
+    </div>`;
+  } else {
+    html += esc(displayText);
+  }
+  return html;
+}
+
+function toggleFold(id) {
+  const el = document.getElementById(id);
+  const truncated = el.querySelector('.folded-text');
+  const full = el.querySelector('.folded-full');
+  const toggle = el.querySelector('.fold-toggle');
+  if (full.style.display === 'none') {
+    truncated.style.display = 'none'; full.style.display = 'inline';
+    toggle.textContent = '收起';
+  } else {
+    truncated.style.display = 'inline'; full.style.display = 'none';
+    toggle.textContent = toggle.textContent.replace('收起', '展开全文');
+  }
+}
+
+function renderTaskComplete(m, meta) {
+  const result = (meta.result||'').slice(0, 5000);
+  makeMsg("task-complete card", m.sender,
+    `<div class="card-title">${esc(meta.title||m.content)}</div>
+     ${result ? `<div class="card-result">${renderRichContent(result)}</div>` : ''}`, m.ts
+  ).id = "task-msg-"+(meta.task_id||'');
 }
 
 function renderApprovalReq(m, meta) {
@@ -466,6 +590,18 @@ setInterval(() => {
   for (const a of agentCache) names.add(a.name);
   sel.innerHTML = [...names].map(n=>`<option value="${n}" ${n===current?'selected':''}>${n}</option>`).join("");
 }, 5000);
+
+// ── PWA Service Worker ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/service-worker.js');
+}
+
+// Mobile PWA prompt removed — Hermes gateway handles mobile via messaging apps
+
+let deferredPrompt;
+window.addEventListener('beforeinstallprompt', function(e) {
+  e.preventDefault(); deferredPrompt = e;
+});
 
 connectWS();
 loadInitial();

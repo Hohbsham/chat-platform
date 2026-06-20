@@ -12,10 +12,31 @@ A2A Chat Platform v2 — HTTP Server + WebSocket
 import asyncio, json, time, os, sys, uuid, re, threading
 from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """Multi-threaded HTTP server — handles concurrent agent polling."""
+    daemon_threads = True
 from websockets.asyncio.server import serve
 from models import AgentStore, TaskStore, MessageStore
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Load .env if exists
+_env_path = os.path.join(BASE_DIR, ".env")
+if os.path.exists(_env_path):
+    with open(_env_path, "r", encoding="utf-8") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                os.environ.setdefault(_k.strip(), _v.strip())
+
+# WeCom notification bridge (optional)
+try:
+    from wecom_bridge import notify_task_complete as wecom_notify
+except ImportError:
+    wecom_notify = lambda *a, **kw: None
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[1] == "--port" else 8765
 WS_PORT = PORT + 1  # WebSocket on next port
 SVR_STARTED = time.time()
@@ -68,6 +89,16 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
+    def _static(self, filename):
+        path = os.path.join(BASE_DIR, filename)
+        if not os.path.exists(path):
+            self.send_error(404); return
+        ct = {"json":"application/json","js":"application/javascript",
+              "png":"image/png","ico":"image/x-icon"}.get(filename.rsplit(".",1)[-1],"application/octet-stream")
+        self.send_response(200); self._cors()
+        self.send_header("Content-Type", ct); self.end_headers()
+        with open(path, "rb") as f: self.wfile.write(f.read())
+
     def _html(self):
         html_path = os.path.join(BASE_DIR, "index.html")
         with open(html_path, "r", encoding="utf-8") as f:
@@ -96,7 +127,12 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         qs = parse_qs(urlparse(self.path).query)
 
-        if path in ("/", ""):
+        # Static files (PWA)
+        if path in ("/manifest.json", "/service-worker.js",
+                     "/icon-192.png", "/icon-512.png"):
+            self._static(path[1:])
+
+        elif path in ("/", ""):
             self._html()
         elif path == "/api/health":
             online = len(agents.online_agents())
@@ -184,6 +220,47 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
             else:
                 self._json(404, {"ok": False, "error": "Agent not found"})
 
+        # Agent progress report (real-time working status)
+        elif path == "/api/agents/progress":
+            agent_id = data.get("agent_id", "")
+            status_text = data.get("status", "working...")
+            agent = agents.find(agent_id)
+            if agent:
+                emit_event("task_working", agent.name,
+                    f"{agent.name} {status_text}",
+                    {"agent_id": agent_id, "agent_name": agent.name,
+                     "task_id": data.get("task_id", ""), "status": status_text})
+                self._json(200, {"ok": True})
+            else:
+                self._json(404, {"ok": False, "error": "Agent not found"})
+
+        # Agent observe messages (inter-agent awareness)
+        elif path == "/api/agents/observe":
+            agent_id = data.get("agent_id", "")
+            since = data.get("since", time.time() - 30)
+            recent = messages.all(since)
+            # Filter for task events + chat messages that mention this agent
+            a = agents.find(agent_id)
+            name = a.name if a else ""
+            mentions = [m for m in recent
+                       if name and name.lower() in json.dumps(m).lower()
+                       or m.get("type") in ("task_create", "task_claim", "task_complete",
+                                            "broadcast_response", "task_working")]
+            self._json(200, {"ok": True, "observed": mentions[-10:]})
+
+        # Agent-to-agent mention (direct communication)
+        elif path == "/api/agents/mention":
+            agent_id = data.get("agent_id", "")
+            target = data.get("target", "")
+            content = data.get("content", "")
+            a = agents.find(agent_id)
+            if not a:
+                self._json(404, {"ok": False, "error": "Agent not found"}); return
+            emit_event("agent_mention", a.name,
+                f"@{target} {content}",
+                {"agent_id": agent_id, "from": a.name, "target": target, "content": content})
+            self._json(200, {"ok": True})
+
         # Task create
         elif path == "/api/tasks":
             task = tasks.create(
@@ -245,6 +322,8 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
                 agents.set_status(agent_id, "busy", task_id)
                 emit_event("task_claim", agent_name, f"{agent_name} 参与广播: {task.title}",
                            {"task_id": task_id, "claimed_by": agent_id, "agent_name": agent_name})
+                emit_event("task_working", agent_name, f"⚙ {agent_name} 开始处理「{task.title}」...",
+                           {"task_id": task_id, "agent_name": agent_name, "status": "thinking"})
             else:
                 if task.max_rounds > 0 and agent_id not in task.speaker_queue:
                     task.speaker_queue.append(agent_id)
@@ -253,6 +332,8 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
                 agents.set_status(agent_id, "busy", task_id)
                 emit_event("task_claim", agent_name, f"{agent_name} 领取了任务: {task.title}",
                            {"task_id": task_id, "claimed_by": agent_id, "agent_name": agent_name})
+                emit_event("task_working", agent_name, f"⚙ {agent_name} 正在分析「{task.title}」...",
+                           {"task_id": task_id, "agent_name": agent_name, "status": "thinking"})
             self._json(200, {"ok": True, "task": tasks.find(task_id).to_dict()})
 
         elif action == "complete":
@@ -286,6 +367,8 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
                 agents.set_status(agent_id, "online", None)
                 emit_event("task_complete", agent_name, f"[完成] {task.title}",
                            {"task_id": task_id, "completed_by": agent_id, "agent_name": agent_name, "result": result})
+                # Push to WeCom
+                wecom_notify(agent_name, getattr(agent, 'role', ''), task.title, result)
             self._json(200, {"ok": True, "task": tasks.find(task_id).to_dict()})
 
         elif action == "fail":
@@ -381,6 +464,8 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
             agents.set_status(agent_id, "busy", best.task_id)
             emit_event("task_claim", agent.name, f"{agent.name} 参与广播: {best.title}",
                        {"task_id": best.task_id, "claimed_by": agent_id, "agent_name": agent.name})
+            emit_event("task_working", agent.name, f"⚙ {agent.name} 开始处理「{best.title}」...",
+                       {"task_id": best.task_id, "agent_name": agent.name, "status": "thinking"})
         else:
             if best.max_rounds > 0 and agent_id not in best.speaker_queue:
                 best.speaker_queue.append(agent_id)
@@ -389,6 +474,8 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
             agents.set_status(agent_id, "busy", best.task_id)
             emit_event("task_claim", agent.name, f"{agent.name} 领取了任务: {best.title}",
                        {"task_id": best.task_id, "claimed_by": agent_id, "agent_name": agent.name})
+            emit_event("task_working", agent.name, f"⚙ {agent.name} 正在分析「{best.title}」...",
+                       {"task_id": best.task_id, "agent_name": agent.name, "status": "thinking"})
 
         result = {"ok": True, "claimed": tasks.find(best.task_id).to_dict()}
         if best.context:
@@ -446,7 +533,7 @@ def run_http():
             with open(path, "w", encoding="utf-8") as f:
                 json.dump([], f)
 
-    server = HTTPServer(("0.0.0.0", PORT), ChatHTTPHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), ChatHTTPHandler)
     print(f" HTTP REST API:  http://localhost:{PORT}")
     print(f"   /api/health  /api/tasks  /api/agents  /api/messages")
     print(f" Agent Identity | Task State Machine | GroupChat | Broadcast | HITL")
