@@ -19,6 +19,7 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 from websockets.asyncio.server import serve
 from models import AgentStore, TaskStore, MessageStore
+from logger import a2a_logger as log
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -40,6 +41,7 @@ except ImportError:
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[1] == "--port" else 8765
 WS_PORT = PORT + 1  # WebSocket on next port
 SVR_STARTED = time.time()
+log.info("A2A Server starting", port=PORT, ws_port=WS_PORT)
 
 agents = AgentStore()
 tasks = TaskStore()
@@ -138,11 +140,13 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
             online = len(agents.online_agents())
             all_tasks = tasks.all()
             pending = sum(1 for t in all_tasks if t.status == "pending")
+            summary = log.task_summary()
             self._json(200, {
                 "ok": True, "agents_online": online, "agents_total": agents.count(),
                 "tasks_pending": pending, "tasks_total": len(all_tasks),
                 "uptime": round(time.time() - SVR_STARTED, 1),
                 "ws_port": WS_PORT,
+                "task_stats": summary,
             })
         elif path == "/api/messages":
             since = float(qs.get("since", [0])[0]) if qs.get("since") else 0
@@ -277,6 +281,9 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
             broadcast_tag = "[广播] " if task.broadcast else ""
             grp_tag = f"[群聊 {task.max_rounds}轮] " if task.max_rounds else ""
             deps_tag = f" (依赖: {', '.join(task.context)})" if task.context else ""
+            log.task_event(task.task_id, "pending",
+                          creator=task.creator, priority=task.priority,
+                          caps=task.required_capabilities)
             emit_event("task_create", task.creator,
                 f"{broadcast_tag}{grp_tag}[新任务] {task.title}{deps_tag}",
                 {"task_id": task.task_id, "title": task.title, "description": task.description,
@@ -334,6 +341,7 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
                            {"task_id": task_id, "claimed_by": agent_id, "agent_name": agent_name})
                 emit_event("task_working", agent_name, f"⚙ {agent_name} 正在分析「{task.title}」...",
                            {"task_id": task_id, "agent_name": agent_name, "status": "thinking"})
+            log.task_event(task_id, "claimed", agent=agent_name)
             self._json(200, {"ok": True, "task": tasks.find(task_id).to_dict()})
 
         elif action == "complete":
@@ -369,6 +377,7 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
                            {"task_id": task_id, "completed_by": agent_id, "agent_name": agent_name, "result": result})
                 # Push to WeCom
                 wecom_notify(agent_name, getattr(agent, 'role', ''), task.title, result)
+            log.task_event(task_id, "completed", agent=agent_name, result_len=len(result))
             self._json(200, {"ok": True, "task": tasks.find(task_id).to_dict()})
 
         elif action == "fail":
@@ -379,6 +388,7 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
             agents.set_status(agent_id, "online", None)
             emit_event("task_fail", agent_name, f"[失败] {task.title}",
                        {"task_id": task_id, "failed_by": agent_id, "agent_name": agent_name, "error": error})
+            log.task_event(task_id, "failed", agent=agent_name, error=error[:80])
             self._json(200, {"ok": True, "task": tasks.find(task_id).to_dict()})
 
         elif action == "cancel":
@@ -386,6 +396,7 @@ class ChatHTTPHandler(BaseHTTPRequestHandler):
                 self._json(400, {"ok": False, "error": f"Task already {task.status}"}); return
             tasks.update(task_id, status="cancelled")
             emit_event("task_cancel", "System", f"[取消] 任务已取消: {task.title}", {"task_id": task_id})
+            log.task_event(task_id, "cancelled")
             self._json(200, {"ok": True, "task": tasks.find(task_id).to_dict()})
 
         elif action == "comment":
