@@ -109,6 +109,25 @@ def save_agent_id(agent_id):
 
 _AI_CONFIG = None
 
+def _load_agent_prompt(agent_name):
+    """Load system prompt from learning_agents.json for interview prep agents."""
+    prompt_path = os.path.join(BASE_DIR, "learning_agents.json")
+    if not os.path.exists(prompt_path):
+        return None
+    try:
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Check orchestrator
+        if data.get("orchestrator", {}).get("name") == agent_name:
+            return data["orchestrator"].get("system_prompt")
+        # Check specialists
+        for s in data.get("specialists", []):
+            if s.get("name") == agent_name:
+                return s.get("system_prompt")
+    except Exception:
+        pass
+    return None
+
 def _load_ai_config():
     global _AI_CONFIG
     if _AI_CONFIG is not None:
@@ -148,6 +167,9 @@ def call_ai(task_title, task_desc, agent_name, role, goal, backstory, capabiliti
     if not cfg["api_key"] or not cfg["base_url"]:
         return None, "No AI API configured"
 
+    # Load system prompt from learning_agents.json if available
+    system_prompt = _load_agent_prompt(agent_name)
+
     # Build rich identity-aware prompt (CrewAI-inspired)
     identity_block = f"""You are "{agent_name}", an AI agent with a specific identity:
 
@@ -174,8 +196,15 @@ INSTRUCTIONS:
 - Respond in character as {agent_name}, consistent with your role and backstory.
 - If the task asks what model you use: state that you are powered by DeepSeek v4 Pro via API.
 - Answer the task directly and helpfully.
-- Keep your response under 400 characters.
-- If this is a status report, confirm you are operational and state your capabilities."""
+- Keep your response concise and structured.
+- If this is a status report, confirm you are operational and state your capabilities.
+{SYSTEM_PROMPT_INJECT}"""
+
+    # Inject system prompt from learning_agents.json if available
+    if system_prompt:
+        prompt = prompt.replace("{SYSTEM_PROMPT_INJECT}", f"\n\n## SYSTEM PROMPT\n{system_prompt}")
+    else:
+        prompt = prompt.replace("{SYSTEM_PROMPT_INJECT}", "")
 
     url = cfg["base_url"].rstrip("/") + "/v1/chat/completions"
     model_name = cfg["model"].split("/")[-1] if "/" in cfg["model"] else cfg["model"]
