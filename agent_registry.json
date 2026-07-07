@@ -1,0 +1,67 @@
+{
+  "specialists": [
+    {
+      "name": "LearnMaster",
+      "role": "AI面试学习管家 / 总调度官",
+      "capabilities": ["task_orchestration", "progress_tracking", "question_generation", "difficulty_adjustment"],
+      "launch": "python agent.py auto --name LearnMaster --role \"AI面试学习管家\" --capabilities task_orchestration,progress_tracking,question_generation,difficulty_adjustment --auto-reply --poll-interval 5",
+      "prompt_file": "learning_agents.json#orchestrator"
+    },
+    {
+      "name": "CodeJudge",
+      "role": "算法题裁判 / 代码审查官",
+      "capabilities": ["algorithm_judge", "code_review", "complexity_analysis", "test_case_gen"],
+      "launch": "python agent.py auto --name CodeJudge --role \"算法题裁判\" --capabilities algorithm_judge,code_review,complexity_analysis,test_case_gen --auto-reply --poll-interval 5",
+      "prompt_file": "learning_agents.json#specialists.0"
+    },
+    {
+      "name": "ModelExpert",
+      "role": "PyTorch模型手撕导师 / 架构讲解师",
+      "capabilities": ["pytorch_review", "model_architecture", "dimension_check", "principle_questioning"],
+      "launch": "python agent.py auto --name ModelExpert --role \"模型手撕导师\" --capabilities pytorch_review,model_architecture,dimension_check,principle_questioning --auto-reply --poll-interval 5",
+      "prompt_file": "learning_agents.json#specialists.1"
+    },
+    {
+      "name": "InterviewCoach",
+      "role": "八股知识考官 / 面试官模拟器",
+      "capabilities": ["knowledge_questioning", "depth_scoring", "interview_simulation", "gap_analysis"],
+      "launch": "python agent.py auto --name InterviewCoach --role \"八股考官\" --capabilities knowledge_questioning,depth_scoring,interview_simulation,gap_analysis --auto-reply --poll-interval 5",
+      "prompt_file": "learning_agents.json#specialists.2"
+    },
+    {
+      "name": "Claude-Reviewer",
+      "role": "Academic Paper Reviewer & Editor",
+      "capabilities": ["paper_review", "academic_writing", "logic_check", "structure_analysis", "methodology_review"],
+      "launch": "python agent.py auto --name Claude-Reviewer --role \"Academic Reviewer\" --capabilities paper_review,academic_writing,logic_check,structure_analysis,methodology_review --auto-reply --poll-interval 10"
+    },
+    {
+      "name": "Claude-Scorer",
+      "role": "AI-Detection & Academic Style Compliance Scorer",
+      "capabilities": ["ai_detection", "style_analysis", "academic_compliance", "pattern_recognition", "text_forensics"],
+      "launch": "python agent.py auto --name Claude-Scorer --role \"AI Detection Scorer\" --capabilities ai_detection,style_analysis,academic_compliance,pattern_recognition,text_forensics --auto-reply --poll-interval 10"
+    },
+    {
+      "name": "Cursor",
+      "role": "Full-Stack Developer & Debugger",
+      "capabilities": ["code_generation", "debugging", "refactoring"],
+      "launch": "python agent.py auto --name Cursor --role \"Full-Stack Developer\" --capabilities code_generation,debugging,refactoring --auto-reply --poll-interval 10"
+    },
+    {
+      "name": "BPTtrain",
+      "role": "BPT Training Monitor & Reporter",
+      "capabilities": ["training_monitor", "mesh_eval", "report_generation", "architecture_design", "dataset_inspection", "code_review", "progress_tracking", "debugging"],
+      "launch": "python agent.py auto --name BPTtrain --role \"BPT训练监控/网格评估/报告生成\" --capabilities training_monitor,mesh_eval,report_generation,architecture_design,dataset_inspection,code_review,progress_tracking,debugging --auto-reply --poll-interval 10"
+    },
+    {
+      "name": "BPT_Data_Check",
+      "role": "BPT Data Quality Inspector",
+      "capabilities": ["dataset_inspection", "mesh_quality_check", "data_cleaning", "quad_check", "kp_extract", "boundary_extract", "report_generation", "progress_tracking"],
+      "launch": "python agent.py auto --name BPT_Data_Check --role \"数据质检/Quad验证/Keypoint提取\" --capabilities dataset_inspection,mesh_quality_check,data_cleaning,quad_check,kp_extract,boundary_extract,report_generation,progress_tracking --auto-reply --poll-interval 10"
+    }
+  ],
+  "manager": {
+    "name": "OpenClaw",
+    "role": "Agent Orchestrator & User Proxy",
+    "instructions": "Monitor chat messages. When user sends a request, parse intent via AI, check which specialists are online, create tasks with matching capabilities, wait for results, then report back to the user."
+  }
+}

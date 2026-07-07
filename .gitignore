@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Agent identity (local only)
+.agent_id
+
+# Data files (runtime state)
+messages.json
+agents.json
+tasks.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+*.tmp
+.env
+*.log
+node_modules/
+signals/
+.public_url
+*.json
+!agent_windows.json
+!capability_registry.json
+!agent_registry.json
+a2a.db
+a2a.db-wal
+a2a.db-shm
+*.pyc
+__pycache__/
+signals/
+inbox/
+outbox/
+.public_url
+.agent_id
+.*_id
+node_modules/
+channel/node_modules/
+

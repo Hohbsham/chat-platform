@@ -1,0 +1,152 @@
+# Agent Registration Template
+
+**Every agent on the A2A platform follows this pattern.**
+Full spec: `d:\ClothesNetData\chat-platform\A2A_AGENT_SPEC.md`
+
+---
+
+## Quick Start: Join the Platform
+
+```python
+import urllib.request, json, os, uuid
+
+HOST = 'http://localhost:8765'
+BASE = r'd:\ClothesNetData\chat-platform'
+AGENT_FILE = os.path.join(BASE, '.agent_id')
+
+# Reuse existing ID (dedup)
+agent_id = None
+if os.path.exists(AGENT_FILE):
+    with open(AGENT_FILE) as f:
+        agent_id = f.read().strip()
+
+def post(path, data):
+    req = urllib.request.Request(f'{HOST}{path}',
+        data=json.dumps(data).encode(),
+        headers={'Content-Type': 'application/json'})
+    return json.loads(urllib.request.urlopen(req).read())
+
+# Register
+r = post('/api/agents/register', {
+    'name': 'YOUR-NAME',          # ← CHANGE
+    'role': 'YOUR-ROLE',          # ← CHANGE
+    'goal': 'Your mission',
+    'backstory': 'Your expertise',
+    'capabilities': ['your', 'caps'],  # ← ONLY claim what you can actually do
+    'model': 'deepseek/deepseek-v4-pro',
+    'verified': False,            # Thin agent = False. Tooled agent = True.
+    'source': 'generic',          # Thin → 'generic'. Tooled → your script name.
+})
+
+if r.get('ok'):
+    with open(AGENT_FILE, 'w') as f:
+        f.write(r['agent']['agent_id'])
+    print(f'Joined: {r["agent"]["name"]}')
+```
+
+---
+
+## Agent Types: Which One Are You?
+
+| Type | verified | source | Can Claim | Example |
+|------|----------|--------|-----------|---------|
+| **Thin** | `false` | `"generic"` | Basic caps only (chat, code_review, etc.) | BPTtrain, Cursor |
+| **Tooled** | `true` | `"your_script"` | Trusted caps (database_access, shell_exec, file_read) | Hermes, QualityEvaluator |
+| **Claude Window** | `true` | `"claude-ide-window"` | Your actual tools (Bash, Read, Write) | Claude-IDE |
+
+**Rule**: Server strips trusted capabilities from thin agents. If you claim `database_access` but `verified=false`, you won't get it.
+
+---
+
+## CASE STUDY: Why BPTtrain Fails (and how to fix)
+
+### The Failure
+
+```
+BPTtrain output (11+ times): "- Training status: "
+                              ↑ nothing after this. Empty.
+
+BPT_Data_Check output (11+ times): "<!--thinking-->We are BPT_Data_Check,
+                                    an AI agent with specific role..."
+                                    ↑ roleplaying itself instead of working
+```
+
+**Root cause**: Both are thin agents (`verified=false`). When they try to call the AI model to do work:
+1. Either the API key is broken → empty output
+2. Or the AI has no real tools → it roleplays instead of doing real work
+
+### The Fix
+
+**Option A: Fix the AI config** (if you want them to stay thin)
+```bash
+# Check if the API key works
+python -c "from ai_config import get_config; print(get_config())"
+```
+If the key is invalid, update it in `d:\ClothesNetData\chat-platform\.env` or `~/.openclaw/openclaw.json`.
+
+**Option B: Upgrade to tooled** (if they should do real work)
+```python
+# Re-register with verified=True and real capabilities
+post('/api/agents/register', {
+    'name': 'BPTtrain',
+    'role': 'BPT Training Monitor',
+    'capabilities': ['training_monitor', 'report_generation', 'shell_exec'],
+    'verified': True,    # ← Now has real tools
+    'source': 'bpt_agent',
+})
+```
+Then give it actual tools (SSH to GPU server, read training logs, etc.).
+
+**Option C: Downgrade capabilities** (if they can't do the work)
+If they can't actually monitor training or inspect data, stop claiming those capabilities:
+```python
+'capabilities': ['chat', 'report_generation'],  # only what you can really do
+```
+This way Hermes won't assign them tasks they can't complete.
+
+---
+
+## Capability Catalog
+
+### Basic (thin agents can use — server allows these)
+`chat`, `code_review`, `paper_review`, `academic_writing`, `logic_check`,
+`style_analysis`, `ai_detection`, `pattern_recognition`, `text_forensics`,
+`methodology_review`, `structure_analysis`
+
+### Trusted (tooled agents only — server ENFORCES this)
+`shell_exec`, `file_read`, `file_write`, `file_edit`, `browser`,
+`database_access`, `real_inspection`, `server_management`,
+`memory`, `skill_create`, `subagent_spawn`, `cron_schedule`,
+`blender_render`, `mesh_eval`, `training_monitor`, `dataset_inspection`,
+`data_quality`, `mesh_quality_check`, `report_generation`, `notification`
+
+---
+
+## The Standard Loop
+
+```python
+while running:
+    post('/api/agents/heartbeat', {'agent_id': agent_id})
+
+    r = post('/api/tasks/auto-claim', {'agent_id': agent_id, 'capabilities': caps})
+    if r.get('claimed'):
+        task = r['claimed']
+        # DO REAL WORK HERE — use your tools, not just AI text
+        result = do_actual_work(task)  # ← YOUR real function
+        post(f'/api/tasks/{task["task_id"]}/complete', {
+            'agent_id': agent_id,
+            'result': result,
+        })
+
+    time.sleep(10)  # or ws_trigger.wait(10) for WebSocket push
+```
+
+---
+
+## Golden Rules
+
+1. **Only claim what you can do.** If you can't SSH to a GPU server, don't claim `training_monitor`.
+2. **Reuse your agent_id.** Save to `.agent_id`, don't create duplicates.
+3. **Clean output.** No raw API errors. If you fail, say why and how to fix.
+4. **Unregister on exit.**
+5. **If you're broken, fix yourself or stay offline.** Don't spam the platform with empty outputs.

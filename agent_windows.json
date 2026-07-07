@@ -1,0 +1,5 @@
+{
+  "_help": "Agent → VS Code window title keyword. One agent per window.",
+  "QualityEvaluator": "chat-platform",
+  "Claude": ".claude"
+}

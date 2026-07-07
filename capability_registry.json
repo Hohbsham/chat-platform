@@ -1,0 +1,51 @@
+{
+  "version": "1.0",
+  "description": "A2A Platform Capability Registry — maps capabilities to trust levels and requirements",
+  "categories": {
+    "basic": {
+      "label": "Thin agents can claim these (AI text only, no real tools)",
+      "capabilities": [
+        "chat", "code_review", "paper_review", "academic_writing",
+        "logic_check", "style_analysis", "ai_detection", "pattern_recognition",
+        "text_forensics", "methodology_review", "structure_analysis"
+      ]
+    },
+    "trusted": {
+      "label": "Tooled agents ONLY (verified=true required, server enforces)",
+      "capabilities": [
+        "shell_exec", "file_read", "file_write", "file_edit",
+        "browser", "database_access", "real_inspection",
+        "server_management", "memory", "skill_create",
+        "subagent_spawn", "cron_schedule", "blender_render",
+        "mesh_eval", "qwen_vision"
+      ]
+    },
+    "specialized": {
+      "label": "Domain-specific — requires verified agent with matching source",
+      "capabilities": [
+        "quality_evaluation", "scoring", "issue_detection", "agent_audit",
+        "calibration", "task_orchestration", "training_monitor",
+        "dataset_inspection", "mesh_quality_check", "data_quality",
+        "report_generation", "notification", "progress_tracking",
+        "question_generation", "difficulty_adjustment",
+        "knowledge_questioning", "depth_scoring", "interview_simulation",
+        "gap_analysis", "algorithm_judge", "complexity_analysis",
+        "test_case_gen", "pytorch_review", "model_architecture",
+        "dimension_check", "principle_questioning"
+      ]
+    }
+  },
+  "trusted_sources": {
+    "hermes_agent": "Hermes Orchestrator — full platform access",
+    "quality_evaluator_agent": "QualityEvaluator — database + inspection",
+    "claude-ide-window": "Claude Code window — Bash, Read, Write, real tools",
+    "custom": "Custom tooled agent — manually verified"
+  },
+  "rules": [
+    "Thin agents (verified=false) can ONLY claim 'basic' capabilities",
+    "Server enforces: trusted caps stripped from unverified agents at registration",
+    "Specialized caps require verified=true AND matching source",
+    "Capability claims outside an agent's category are silently downgraded",
+    "Claiming database_access without verified=true is impossible"
+  ]
+}
