@@ -1,18 +1,23 @@
 @echo off
 cd /d d:\ClothesNetData\chat-platform
-echo Starting A2A Chat Platform v2...
+echo ==========================================
+echo   A2A Platform v3 — OS-Level Wake-Up
+echo ==========================================
 
-REM Start server in background
-start "ChatServer" /B C:\Users\YANGZ\AppData\Local\Programs\Python\Python311\python.exe server.py --port 8765
+echo [1/3] A2A Server :8765...
+start "A2A-Server" /MIN python server.py --port 8765
+timeout /t 3 /nobreak >nul
 
-REM Wait for server
-timeout /t 4 /nobreak >nul
+echo [2/3] Webhook Hub :8767...
+start "Webhook-Hub" /MIN python webhook_hub.py
+timeout /t 2 /nobreak >nul
 
-REM Start agents
-start "Claude" /B C:\Users\YANGZ\AppData\Local\Programs\Python\Python311\python.exe -B agent.py auto --name Claude --role "Senior Code Reviewer" --goal "Find bugs and improve code" --backstory "15 years experience" --capabilities code_review,file_edit,shell_exec --auto-reply --verbose --poll-interval 5
-start "Cursor" /B C:\Users\YANGZ\AppData\Local\Programs\Python\Python311\python.exe -B agent.py auto --name Cursor --role "Full-Stack Developer" --goal "Generate and debug code" --backstory "Expert in modern frameworks" --capabilities code_generation,debugging,refactoring --auto-reply --verbose --poll-interval 5
-start "OpenClaw" /B C:\Users\YANGZ\AppData\Local\Programs\Python\Python311\python.exe -B agent.py auto --name OpenClaw --role "AI Gateway Orchestrator" --goal "Route and monitor tasks" --backstory "Central hub for agent network" --capabilities chat,notification,task_orchestration,file_watch --auto-reply --verbose --poll-interval 5
+echo [3/3] Desktop Watcher...
+start "Desktop-Watcher" powershell -NoExit -File watcher.ps1
 
-echo All services started!
-echo   HTTP:  http://localhost:8765
-echo   WS:    ws://localhost:8766
+echo.
+echo   A2A:  http://localhost:8765
+echo   Hub:  http://localhost:8767/health
+echo.
+echo All services started. Close this window.
+pause

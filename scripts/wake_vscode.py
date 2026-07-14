@@ -104,11 +104,18 @@ def wake_up(agent_name=None):
 
     import pyautogui
 
-    # Wait until target window truly has foreground (terminal may steal it briefly)
-    for _ in range(10):
-        time.sleep(0.3)
-        if user32.GetForegroundWindow() == hwnd:
-            break
+    # Force foreground and KEEP it — re-force before each operation
+    def ensure_foreground():
+        for _ in range(5):
+            user32.SetForegroundWindow(hwnd)
+            user32.BringWindowToTop(hwnd)
+            time.sleep(0.2)
+            if user32.GetForegroundWindow() == hwnd:
+                return True
+        return False
+
+    if not ensure_foreground():
+        return False
 
     rect = (ctypes.c_int * 4)()
     ctypes.windll.dwmapi.DwmGetWindowAttribute(
@@ -116,20 +123,28 @@ def wake_up(agent_name=None):
     wx, wy = rect[0], rect[1]
     ww, wh = rect[2] - wx, rect[3] - wy
 
-    # Click tab bar (wy+10) to ensure window focus
-    pyautogui.click(wx + int(ww * 0.50), wy + 10)
-    time.sleep(0.3)
-    # Click Claude panel center to focus Claude
-    pyautogui.click(wx + int(ww * 0.80), wy + int(wh * 0.50))
+    # Triple-click Claude input box at (60%, 65%)
+    ensure_foreground()
+    ix, iy = wx + int(ww * 0.60), wy + int(wh * 0.65)
+    pyautogui.click(ix, iy, clicks=3, interval=0.1)
     time.sleep(0.5)
-    time.sleep(0.5)
+
     # Type trigger text
+    ensure_foreground()
     pyautogui.write('look at signals/', interval=0.05)
     time.sleep(0.5)
-    # Click submit button
-    click_submit(hwnd)
-    # Wait for Claude hook to process the signal before bash loop deletes it
-    time.sleep(5)
+
+    # Single submit click at (79%, 70%)
+    ensure_foreground()
+    sx, sy = wx + int(ww * 0.79), wy + int(wh * 0.70)
+    pyautogui.moveTo(sx, sy, duration=0.1)
+    time.sleep(0.1)
+    pyautogui.mouseDown(sx, sy)
+    time.sleep(0.05)
+    pyautogui.mouseUp(sx, sy)
+
+    # Wait for Claude hook to process
+    time.sleep(15)
     return True
 
 

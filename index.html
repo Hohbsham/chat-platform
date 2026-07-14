@@ -825,7 +825,7 @@
                 type: 'chat',
                 sender: 'User',
                 content: content,
-                timestamp: new Date().toISOString()
+                ts: Date.now() / 1000
             };
 
             // Add to local messages and render
@@ -857,7 +857,7 @@
 
         function pollMessages() {
             // Backend expects float epoch seconds, not ISO string
-            const since = lastMsgTs || (Date.now() / 1000 - 30);
+            const since = lastMsgTs || (Date.now() / 1000 - 86400);  // Show 24h history on first load
 
             fetch(`/api/messages?since=${encodeURIComponent(since)}`)
                 .then(response => response.json())

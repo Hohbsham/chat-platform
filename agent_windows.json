@@ -1,5 +1,7 @@
 {
-  "_help": "Agent → VS Code window title keyword. One agent per window.",
+  "_help": "Agent name → VS Code window title keyword. One agent per window.",
   "QualityEvaluator": "chat-platform",
-  "Claude": ".claude"
+  "Claude": ".claude",
+  "BPTtrain": "garmageset_download",
+  "BPT_Data_Check": "服装自适应"
 }

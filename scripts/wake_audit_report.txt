@@ -1,0 +1,276 @@
+======================================================================
+## Wake-Up System Code Audit
+======================================================================
+
+**Auditor:** Claude
+**Scope:** 4 files — wake_vscode.py, watcher.py, check_signal.py, watcher.ps1
+**Date:** 2026-07-14
+
+---
+
+### Files Reviewed
+
+| File | Lines | Role |
+|------|-------|------|
+| scripts/wake_vscode.py | 139 | OS-level Win32 window activation + pyautogui click |
+| scripts/watcher.py | 16 | Python heartbeat watcher (30s cycle) |
+| scripts/check_signal.py | 63 | UserPromptSubmit hook — reads signals, injects context |
+| watcher.ps1 | 14 | PowerShell watcher (2s poll loop) |
+
+---
+
+### Issues Found: 5
+
+---
+
+#### P0-1: Signal Deleted Before Task Completion (check_signal.py:43-51)
+
+**Summary:** check_signal.py deletes signal files as soon as it reads them — before Claude actually processes and completes the task.
+
+**Evidence:**
+
+check_signal.py lines 43-51:
+```python
+# Delete consumed signal files — task is now in Claude's context
+for name, data in active:
+    if name == ".wake_now.txt":
+        continue
+    sig_path = os.path.join(SIGNALS_DIR, name)
+    try:
+        os.remove(sig_path)  # DELETED HERE
+    except Exception:
+        pass
+```
+
+**Impact:**
+- Signal file is the ONLY durable record of "this task needs work"
+- If Claude context gets truncated or the hook fails mid-injection → signal is gone forever
+- No retry mechanism — fire-and-forget with no confirmation
+- Task stays pending forever because nothing knows to retry the signal
+
+**Severity: P0 (CRITICAL)**
+
+**Fix:**
+```python
+# Don't delete signals here. Delete AFTER task completion (in server.py or QE protocol step 5).
+# Instead, mark as "injected" to prevent re-injection:
+sig_path = os.path.join(SIGNALS_DIR, name)
+with open(sig_path + ".injected", "w") as f:
+    json.dump({"injected_at": time.time(), "task_id": data.get("task_id")}, f)
+# Keep original signal file as fallback — clean it only in the completion handler
+```
+
+---
+
+#### P0-2: watcher.ps1 + check_signal.py Race Condition
+
+**Summary:** Two consumers race to delete signal files — watcher.ps1 polls every 2 seconds and deletes after calling wake_vscode.py, while check_signal.py also deletes on hook fire.
+
+**Evidence:**
+
+watcher.ps1 lines 9-10:
+```powershell
+python scripts\wake_vscode.py $agent
+Remove-Item $f.FullName -Force  # deletes signal immediately after wake
+```
+
+check_signal.py line 49:
+```python
+os.remove(sig_path)  # also deletes signal
+```
+
+wake_vscode.py line 132:
+```python
+time.sleep(5)  # waits 5 seconds AFTER submit
+```
+
+**Timeline of the race:**
+```
+t=0.0s: Signal file written
+t=0.5s: watcher.ps1 detects → calls wake_vscode.py
+t=1.0s: wake_vscode.py activates window, clicks, types "look at signals/"
+t=1.3s: UserPromptSubmit hook fires → check_signal.py reads signals
+t=1.4s: check_signal.py DELETES all signal files
+t=2.0s: watcher.ps1 loops → tries to delete signal (already gone by hook)
+t=6.0s: wake_vscode.py finishes sleep → exits
+```
+
+OR worse:
+```
+t=0.0s: Signal file written
+t=1.5s: watcher.ps1 detects → calls wake_vscode.py
+t=2.0s: wake_vscode.py activates window
+t=2.5s: watcher.ps1 loops again → sees another signal → calls wake_vscode.py AGAIN
+t=2.5s: Now TWO wake_vscode.py instances running — double clicks, double types
+```
+
+**Impact:**
+- Non-deterministic: sometimes hook wins (signal deleted, task injected), sometimes watcher wins (signal deleted BEFORE hook fires, task lost)
+- Double-wake risk: watcher.ps1 can fire a second wake BEFORE the first one's hook triggers
+- The "look at signals/" text at line 127 triggers hook for ALL signals, not just the one that caused the wake
+
+**Severity: P0 (CRITICAL)**
+
+**Fix:**
+```powershell
+# watcher.ps1: add a 10-second cooldown between wakes
+# Also: use a lock file to prevent concurrent wake_vscode.py instances
+$last_wake = 0
+while ($true) {
+    $files = Get-ChildItem signals\*.json -ErrorAction SilentlyContinue
+    foreach ($f in $files) {
+        if ($f.Name -notlike ".*" -and $f.Name -notlike "*.injected") {
+            $now = Get-Date
+            if (($now - $last_wake).TotalSeconds -gt 10) {
+                $agent = [io.path]::GetFileNameWithoutExtension($f.Name)
+                python scripts\wake_vscode.py $agent
+                $last_wake = Get-Date
+                Start-Sleep 10  # Wait for hook to process before polling again
+            }
+        }
+    }
+    Start-Sleep 5
+}
+```
+
+---
+
+#### P1-1: No Signal Dedup — Test Shells Multiply Unchecked (server.py signal creation)
+
+**Summary:** The wake pipeline creates test tasks with different task_ids but identical purpose. No deduplication means 14-20 QE test shells accumulate before cleanup.
+
+**Evidence (from platform today):**
+```
+task-ad12e6b6: QE powershell watcher test
+task-7b40a7df: QE single trigger test
+task-2b907f48: QE wy100 fix test
+task-739bc381: QE triple-click pipeline
+task-c4f60b5a: QE PRODUCTION TEST: full pipeline
+task-64c1012c: QE wake-up final test
+... (14+ more identical patterns)
+```
+
+**Impact:**
+- 14+ QE tasks created per hour, all empty shells
+- Each task creates a signal → wakes Claude → Claude spends tokens cleaning up
+- DB grows with garbage tasks (95 total, ~80% test shells)
+- Self-referential loop: QE wakes → sees QE shells → reports W601 → creates more shells
+
+**Severity: P1 (IMPORTANT)**
+
+**Fix:**
+```python
+# In server.py or wherever tasks are created: dedup before creating
+existing = [t for t in db.task_all()
+            if t.get('status') == 'pending'
+            and t.get('assigned_to') == agent_name]
+if len(existing) >= 3:
+    # Agent already has 3+ pending — don't create more
+    return {"ok": False, "error": "Agent has too many pending tasks"}
+```
+
+---
+
+#### P1-2: wake_vscode.py Uses Fixed Trigger Text (wake_vscode.py:127)
+
+**Summary:** Always types "look at signals/" regardless of which agent or signal triggered the wake.
+
+**Evidence:**
+```python
+pyautogui.write('look at signals/', interval=0.05)
+```
+
+**Impact:**
+- Claude wakes up and looks at ALL signals — processes them all in one go
+- But the specific signal that triggered the wake is not highlighted
+- If Claude processes signal A first but signal B was the urgent one, B may be ignored
+- The task_id from the signal is never included in the prompt
+
+**Severity: P1 (IMPORTANT)**
+
+**Fix:**
+```python
+# Read the specific signal and include its task_id in the prompt
+sig_file = os.path.join(BASE, "signals", f"{agent_name}.json")
+if os.path.exists(sig_file):
+    with open(sig_file) as f:
+        sig = json.load(f)
+    prompt = f"claim and complete {sig['task_id']}: {sig['title']}"
+else:
+    prompt = "look at signals/"
+pyautogui.write(prompt, interval=0.05)
+```
+
+---
+
+#### P2-1: watcher.ps1 Poll Interval Too Short (2 seconds)
+
+**Summary:** Polls every 2 seconds but signals arrive at human timescales (minutes apart).
+
+**Impact:**
+- Unnecessary CPU wake-ups
+- Higher chance of race condition with hook
+- PowerShell process keeps system slightly busy for no benefit
+
+**Severity: P2 (MINOR)**
+
+**Fix:** Change to 10-15 second poll interval.
+
+---
+
+### Architecture Diagram (Current vs Recommended)
+
+**CURRENT (broken):**
+```
+Task → signal file → watcher.ps1 (2s poll) → wake_vscode.py (OS click)
+                          ↓                        ↓
+                    deletes signal           types "look at signals/"
+                          ↓                        ↓
+                    RACE with hook ← ← ← ← UserPromptSubmit hook
+                          ↓
+                    check_signal.py DELETES signals BEFORE task done
+                          ↓
+                    Task stays pending if injection fails
+```
+
+**RECOMMENDED:**
+```
+Task → signal file → watcher.ps1 (10s poll, 15s cooldown)
+                          ↓
+                    wake_vscode.py (reads signal, types specific prompt)
+                          ↓
+                    UserPromptSubmit hook → check_signal.py
+                          ↓
+                    MARKS signal as injected (keeps file as backup)
+                          ↓
+                    Claude processes → POST /api/tasks/{id}/complete
+                          ↓
+                    Server completion handler DELETES signal file
+```
+
+---
+
+### Summary
+
+| Severity | Count | Issues |
+|----------|-------|--------|
+| P0 (Critical) | 2 | Signal deleted before task done, watcher/hook race condition |
+| P1 (Important) | 2 | No task dedup (QE shell spam), fixed trigger text |
+| P2 (Minor) | 1 | watcher.ps1 poll interval too short (2s) |
+
+### ROOT CAUSE of QE Spam
+
+```
+watcher.ps1 → wake_vscode.py → "look at signals/" → hook → check_signal.py
+    → deletes signal → Claude wakes → sees QE history → reports W601
+    → wake pipeline creates ANOTHER QE test → signal → watcher detects → ...
+```
+
+**Break the loop at 3 points:**
+1. Task dedup — don't create task if agent has 3+ pending
+2. Signal persistence — don't delete signal until task is COMPLETED
+3. watcher cooldown — 15s minimum between wakes
+
+======================================================================
+## End of Report
+======================================================================

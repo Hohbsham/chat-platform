@@ -61,18 +61,25 @@ def start_hermes():
 
 
 def start_desktop_watcher():
-    """Bash loop watching signals/ — runs wake_vscode.py from desktop session.
-    NOT a Python subprocess (pyautogui needs real terminal session).
-    Started manually or via the bash command below."""
-    print("[4/4] Desktop Watcher: run manually in terminal —")
-    print(f"      cd {BASE} && while true; do")
-    print(f"        for f in signals/*.json; do")
-    print(f'          [ -f \"$f\" ] || continue')
-    print(f'          agent=$(basename \"$f\" .json)')
-    print(f'          python scripts/wake_vscode.py \"$agent\"')
-    print(f"        done")
-    print(f"        sleep 2")
-    print(f"      done")
+    """Launch desktop watcher in its own terminal window.
+    Must run in a real terminal session — pyautogui needs desktop focus."""
+    print("[4/4] Desktop Watcher: launching in new terminal...")
+    watcher_script = os.path.join(BASE, "scripts", "desktop_watcher.py")
+    if sys.platform == "win32":
+        # Open new cmd window that stays open
+        proc = subprocess.Popen(
+            f'start "A2A Desktop Watcher" cmd /k "{PYTHON} {watcher_script}"',
+            shell=True, cwd=BASE,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        print(f"       Watcher terminal opened (PID ~{proc.pid})")
+    else:
+        # Mac/Linux: open new terminal
+        subprocess.Popen(
+            ["gnome-terminal", "--", "python3", watcher_script],
+            cwd=BASE, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
     return None
 
 
@@ -88,11 +95,12 @@ def start_all():
     procs["server"] = start_server()
     time.sleep(1)
     procs["hermes"] = start_hermes()
+    procs["hermes_bridge"] = launch("HermesBridge", ["hermes_bridge.py"])
     start_desktop_watcher()
 
-    print(f"\n  A2A:  http://localhost:8765")
-    print(f"  Hub:  http://localhost:8767/health")
-    print(f"  Tunnel: cat .public_url")
+    print(f"\n  A2A:      http://localhost:8765")
+    print(f"  Hub:      http://localhost:8767/health")
+    print(f"  Hermes:   say 'Hermes' in chat to talk")
     print("=" * 50)
     return procs
 

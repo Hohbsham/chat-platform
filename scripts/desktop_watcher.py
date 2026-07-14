@@ -62,7 +62,13 @@ def click_submit(hwnd):
     ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(rect), ctypes.sizeof(rect))
     wx, wy = rect[0], rect[1]
     ww, wh = rect[2] - wx, rect[3] - wy
-    pyautogui.click(wx + int(ww * 0.79), wy + int(wh * 0.94))
+    # Single deliberate click — double-click cancels the submit
+    sx, sy = wx + int(ww * 0.79), wy + int(wh * 0.70)
+    pyautogui.moveTo(sx, sy, duration=0.1)
+    time.sleep(0.1)
+    pyautogui.mouseDown(sx, sy)
+    time.sleep(0.05)
+    pyautogui.mouseUp(sx, sy)
 
 
 def wake_agent(hwnd):
@@ -81,16 +87,25 @@ def wake_agent(hwnd):
         wx, wy = rect[0], rect[1]
         ww, wh = rect[2] - wx, rect[3] - wy
 
-        # Click editor area for focus (well below menu bar)
-        pyautogui.click(wx + int(ww * 0.50), wy + 100)
-        time.sleep(0.3)
-        # Click Claude panel
-        pyautogui.click(wx + int(ww * 0.80), wy + int(wh * 0.50))
+        # Minimize our console so pyautogui targets VS Code not terminal
+        console = kernel32.GetConsoleWindow()
+        if console:
+            user32.ShowWindow(console, 6)  # SW_MINIMIZE
+            time.sleep(0.3)
+
+        # Triple-click Claude input box at (60%, 65%) to ensure focus
+        ix, iy = wx + int(ww * 0.60), wy + int(wh * 0.65)
+        pyautogui.click(ix, iy, clicks=3, interval=0.1)
         time.sleep(0.5)
-        # Type + submit
+        # Type trigger text
         pyautogui.write('look at signals/', interval=0.05)
         time.sleep(0.5)
-        click_submit(hwnd)
+        # Single submit click at (79%, 70%)
+        sx, sy = wx + int(ww * 0.79), wy + int(wh * 0.70)
+        pyautogui.moveTo(sx, sy, duration=0.1)
+        pyautogui.mouseDown(sx, sy)
+        time.sleep(0.05)
+        pyautogui.mouseUp(sx, sy)
         return True
     finally:
         # Restore console
@@ -99,9 +114,30 @@ def wake_agent(hwnd):
 
 
 def main():
+    # PID lock — prevent duplicate watchers
+    import tempfile
+    lockfile = os.path.join(tempfile.gettempdir(), "desktop_watcher.lock")
+    if os.path.exists(lockfile):
+        try:
+            with open(lockfile) as f:
+                old_pid = int(f.read().strip())
+            import ctypes
+            SYNCHRONIZE = 0x100000
+            handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, old_pid)
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                print(f"[Watcher] Already running (PID {old_pid}). Exiting.")
+                sys.exit(0)
+        except Exception:
+            os.remove(lockfile)
+    with open(lockfile, "w") as f:
+        f.write(str(os.getpid()))
+
     config = load_config()
     print(f"[Watcher] Agents: {list(config.keys())}")
     print(f"[Watcher] Watching signals/ ...")
+
+    processed = set()  # Track processed task IDs to prevent re-trigger loops
 
     while True:
         if not os.path.isdir(SIGNALS):
@@ -121,23 +157,27 @@ def main():
 
             tid = sig.get("task_id", "?")
             title = sig.get("title", "?")
+
+            # Skip already-processed signals
+            if (agent, tid) in processed:
+                continue
+
             print(f"\n[Watcher] {agent}: {title[:60]}")
+            processed.add((agent, tid))  # Mark immediately to prevent loops
 
             hwnd = find_vscode_window(keyword)
-            if hwnd:
-                print(f"          Waking {keyword} window...")
-                wake_agent(hwnd)
-                print(f"          Done.")
-            else:
-                print(f"          Window '{keyword}' not found — signal stays.")
+            if not hwnd:
+                print(f"          Window '{keyword}' NOT FOUND")
+                # Still delete signal to prevent loop — hook won't fire anyway
+                try: os.remove(sig_path)
+                except: pass
+                continue
 
-            # Delete signal (don't loop)
-            try:
-                os.remove(sig_path)
-            except Exception:
-                pass
-
-            time.sleep(3)  # Cooldown between signals
+            print(f"          Waking {keyword} window...")
+            wake_agent(hwnd)
+            print(f"          Done.")
+            # Don't rename/delete — check_signal.py hook needs the signal file to inject task
+            time.sleep(3)
 
         time.sleep(2)
 

@@ -244,8 +244,11 @@ def _orchestrate_from_chat(agent_id, name, role, goal, backstory, capabilities):
     Read recent chat messages. If any contain a request matching our patterns,
     break it into subtasks and dispatch to specialist agents.
     """
-    # Get recent messages
-    since = time.time() - 60  # last 60 seconds
+    # Get messages since last check (or last 5 min for first run)
+    if not hasattr(_orchestrate_from_chat, '_last_check_ts'):
+        _orchestrate_from_chat._last_check_ts = time.time() - 300
+    since = _orchestrate_from_chat._last_check_ts
+    _orchestrate_from_chat._last_check_ts = time.time()
     try:
         msgs = api_get(f"/api/messages?since={since}")
     except Exception:
@@ -314,7 +317,22 @@ def _orchestrate_from_chat(agent_id, name, role, goal, backstory, capabilities):
                 api_post("/api/send", {"sender": name, "content": summary})
                 print(f"  Orchestration complete: {len(created_tasks)} tasks dispatched")
 
-            return  # only handle one pattern per cycle
+            # Reply to direct messages
+            if "herme" in content_lower or "hermes" in content_lower:
+                log_msg = f"[Hermes] Replying to {latest.get('sender','?')}: {content[:60]}"
+                _log(log_msg)
+                try:
+                    answer, err = hermes_think(
+                        f"User said: {content}",
+                        "You are Hermes, the A2A platform orchestrator. Reply helpfully in Chinese.",
+                        name, role, goal, backstory, capabilities)
+                    if not err and answer:
+                        api_post("/api/send", {"sender": name, "content": answer})
+                        _log(f"[Hermes] Replied: {answer[:80]}...")
+                except Exception as e:
+                    _log(f"[Hermes] Reply error: {e}")
+
+            return  # only handle one message per cycle
 
 
 def run_hermes_agent(name="Hermes", role="Platform Operations Director",

@@ -1,0 +1,240 @@
+======================================================================
+## BPT v8 Training Code — Full Security & Correctness Audit
+======================================================================
+
+**Auditor:** Claude (code_review + architecture_design)
+**Scope:** 5 files, 7 critical dimensions
+**Date:** 2026-07-14
+
+---
+
+### Files Reviewed
+
+| # | File | Lines | Role |
+|---|------|-------|------|
+| 1 | train_cloud_v8.py | 303 | Category Token training script |
+| 2 | category_conditioner.py | 58 | Category Embedding module |
+| 3 | model/serializaiton.py | 413 | BPT serialization / deserialization |
+| 4 | model/model.py | 379 | MeshTransformer 711M definition |
+| 5 | infer_and_eval.py | 220 | Inference + evaluation |
+
+---
+
+### Issues Found: 6
+
+---
+
+#### P0-1: Collate Padding Mismatch (train_cloud_v8.py:95 x model/model.py:61)
+
+**Summary:** collate_v8 pads codes with 0, but model.pad_id is -1. Padding is never detected — model treats padding as real block-0 tokens.
+
+**Evidence:**
+
+collate_v8 (line 95):
+  codes_padded = torch.zeros(len(batch), max_len, dtype=torch.long)
+
+model.__init__ (line 61):
+  self.pad_id = -1
+
+model.forward_on_codes (line 309):
+  code_lens = ((codes == self.pad_id).cumsum(dim=-1)==0).sum(dim=-1)
+
+model.forward_on_codes (line 373-377):
+  ce_loss = F.cross_entropy(..., ignore_index=self.pad_id)  # -1, but padding is 0
+
+**Impact:**
+- 0 is a VALID block_id (block 0,0,0) — indistinguishable from padding
+- EOS appended at full padded length, not true sequence end
+- Cross-entropy loss includes padding tokens — diluted training signal
+- Model learns "block-0" as a frequent artifact token
+
+**Severity: P0 (CRITICAL)**
+
+**Fix:**
+```python
+# collate_v8, line 95: change
+codes_padded = torch.zeros(len(batch), max_len, dtype=torch.long)
+# to:
+codes_padded = torch.full((len(batch), max_len), -1, dtype=torch.long)
+```
+
+---
+
+#### P0-2: Triangle Serialize / Quad Deserialize Mismatch
+
+**Summary:** Training serializes GT as "triangle" but inference deserializes as "quad". Vertex grouping patterns differ structurally.
+
+**Evidence:**
+
+train_cloud_v8.py (line 69):
+  codes = BPT_serialize(gt_mesh, mesh_type="triangle")
+
+infer_and_eval.py (line 119):
+  parser.add_argument("--mesh_type", default="quad")
+
+infer_and_eval.py (line 161):
+  pred_mesh = BPT_deserialize(codes[0].cpu().numpy(), mesh_type=args.mesh_type)
+
+**Structural difference in deserialization:**
+
+Triangle (serializaiton.py:350-351):
+  for j in range(len(sub_seq) - 1):
+      vertices.extend([center, sub_seq[j], sub_seq[j+1]])  # 3-vert, consecutive pairs
+
+Quad (serializaiton.py:381-387):
+  for j in range(0, len(sub_seq) - 2, 2):
+      vertices.extend([center, sub_seq[j], sub_seq[j+1], sub_seq[j+2]])  # 4-vert, step=2
+
+**Impact:**
+- Model learns triangle-style token patterns (consecutive ring vertex pairs)
+- Inference interprets tokens as quad-style (interleaved ring vertex triplets, step=2)
+- Face vertex groups fundamentally wrong — garbled mesh topology
+- quad_ratio metric in evaluate_mesh() will misreport
+
+**Severity: P0 (CRITICAL)**
+
+**Fix (Option A — train with quad, recommended for quad output):**
+```python
+# train_cloud_v8.py line 69:
+codes = BPT_serialize(gt_mesh, mesh_type="quad")
+```
+Requires GT meshes quadrangulated first (via QuadRemesher or Blender).
+
+**Fix (Option B — consistent triangle):**
+```python
+# infer_and_eval.py: change default
+parser.add_argument("--mesh_type", default="triangle")
+```
+Evaluate triangle mesh quality instead of quad_ratio.
+
+**Recommendation:** Option A. Use quadremesher_tools.zip from project root to pre-process.
+
+---
+
+#### P1-1: fp16/fp32 Mixed Precision Risk (train_cloud_v8.py:226-228)
+
+**Summary:** Category embedding may be fp16 under autocast, base_cond is explicitly fp32. Mixed-precision concatenation.
+
+**Evidence:**
+
+train_cloud_v8.py (lines 224-226):
+  base_cond = batch["cond_embeds"].to(device)   # fp32 (.float() at dataset line 77)
+  cat_emb_batch = cat_emb(cat_ids)               # nn.Embedding — may be fp16 under autocast
+  cond_kw["cond_embeds"] = torch.cat([cat_emb_batch, base_cond], dim=1)
+
+Dataset line 77:
+  cond_embeds = emb.squeeze(0).float()  # explicit fp32
+
+category_conditioner.py line 38:
+  self.embedding = nn.Embedding(num_categories + 1, embed_dim)
+
+**Impact:**
+- nn.Embedding autocast behavior varies by PyTorch version
+- torch.cat silently upcasts fp16 to fp32 — no error but gradient flow may be affected
+- Non-deterministic across environments
+
+**Severity: P1 (IMPORTANT)**
+
+**Fix:**
+```python
+cat_emb_batch = cat_emb(cat_ids).float()  # force fp32 before concat
+```
+
+---
+
+#### P1-2: NaN Guard Timing Issues (train_cloud_v8.py:244-260)
+
+**Summary:** NaN guard correctly skips backward, but global_step increments anyway. Large losses silently dropped.
+
+**Evidence:**
+
+Lines 244-260:
+  if torch.isfinite(loss):
+      loss = loss / args.grad_accum_steps
+      scaler.scale(loss).backward()
+  else:
+      continue  # skips backward, but global_step += 1 still happens
+
+Line 259:
+  epoch_loss += lv if lv < 1e4 else 0.0  # silently drops large losses
+
+**Impact:**
+- grad_accum_steps counter drifts if NaN occurs mid-accumulation
+- scaler.step() may fire with fewer accumulated grads than expected
+- Large-but-finite losses hidden from epoch tracking
+
+**Severity: P1 (IMPORTANT)**
+
+**Fix:**
+```python
+if torch.isfinite(loss):
+    loss = loss / args.grad_accum_steps
+    scaler.scale(loss).backward()
+    global_step += 1  # move inside guard
+else:
+    continue  # don't increment global_step
+
+epoch_loss += lv  # don't silently filter large values
+```
+
+---
+
+#### P1-3: infer_and_eval.py Missing Category Conditioning (infer_and_eval.py:22-38)
+
+**Summary:** v8 models require cat_emb for category-aware generation, but infer_and_eval.py never loads it.
+
+**Evidence:**
+
+load_model() loads only the base model:
+  model.load(model_path)
+  model = model.eval().half().cuda()
+  return model  # NO cat_emb!
+
+Training saves cat_emb separately (train_cloud_v8.py:297):
+  torch.save(cat_emb.state_dict(), str(out_dir / "final_cat_emb.pt"))
+
+**Impact:**
+- v8 inference runs without category token signal
+- Generated outputs lack category-specific shape priors
+- For PC-only mode, cat_embeds use random weights
+
+**Severity: P1 (IMPORTANT)**
+
+**Fix:**
+```python
+def load_model(model_path, config_path, cat_emb_path=None):
+    ...
+    if cat_emb_path:
+        from category_conditioner import load_category_conditioner
+        mapper, cat_emb = load_category_conditioner(1024)
+        cat_emb.load_state_dict(torch.load(cat_emb_path))
+        model.cat_emb = cat_emb.cuda().half()
+    return model
+```
+
+---
+
+#### P2-1: Position Embedding Resize — VERIFIED OK
+
+resize_pos_emb.py: F.interpolate with mode='linear' + align_corners=True is correct for 1D position embedding interpolation. Device/dtype preservation is proper. No issues.
+
+---
+
+### Summary
+
+| Severity | Count | Issues |
+|----------|-------|--------|
+| P0 (Critical) | 2 | Collate padding mismatch, Triangle/Quad serialization mismatch |
+| P1 (Important) | 3 | fp16/fp32 mixed precision, NaN guard timing, v8 inference missing cat_emb |
+| P2 (Minor) | 0 | — |
+
+### Recommended Fix Priority
+
+1. **IMMEDIATE:** Fix collate_v8 padding (one-line: torch.zeros -> torch.full with -1)
+2. **BEFORE NEXT TRAIN:** Decide triangle vs quad — retrain with mesh_type="quad" OR switch inference to "triangle"
+3. **BEFORE v8 INFERENCE:** Add cat_emb loading to infer_and_eval.py
+4. **NICE TO HAVE:** Explicit fp32 cast for cat_emb, NaN counter, large-loss tracking
+
+======================================================================
+## End of Audit Report
+======================================================================

@@ -235,7 +235,8 @@ def handle_http(path, method, query, body_bytes):
     if method == "GET":
         # Static files
         if path in ("/manifest.json", "/service-worker.js",
-                     "/icon-192.png", "/icon-512.png"):
+                     "/icon-192.png", "/icon-512.png",
+                     "/test_chat.html"):
             status, headers, body = _static_response(path[1:])
             headers.update(cors_headers)
             _log_req("GET", path, status, start)
@@ -314,7 +315,12 @@ def handle_http(path, method, query, body_bytes):
 
         # Chat
         if path == "/api/send":
-            msg = emit_event("chat", data.get("sender", "?"), data.get("content", ""))
+            sender = data.get("sender", "?")
+            content = data.get("content", "")
+            msg = emit_event("chat", sender, content)
+
+            # Hermes chat handled by hermes_agent.py _orchestrate_from_chat
+
             _log_req("POST", path, 200, start)
             return _json_response({"ok": True, "msg": msg})
 
@@ -566,6 +572,9 @@ def _handle_auto_claim(data, start):
     if agent["status"] == "offline":
         _log_req("POST", "/api/tasks/auto-claim", 400, start)
         return _json_response({"ok": False, "error": "Agent is offline", "code": "AGENT_OFFLINE"}, 400)
+    if not agent.get("verified"):
+        _log_req("POST", "/api/tasks/auto-claim", 403, start)
+        return _json_response({"ok": False, "error": "Thin agent blocked — verified=False", "code": "AGENT_NOT_VERIFIED"}, 403)
 
     db.agent_heartbeat(agent_id)
     all_tasks = db.task_all()
@@ -733,7 +742,74 @@ async def cleanup_loop():
             log.error("Cleanup error", error=str(e))
 
 
-# ── Asyncio HTTP server ────────────────────────────────────────────
+# ── Desktop watcher (in-process — no external process needed) ──
+
+async def watcher_loop():
+    """Every 2s: scan signals/, find VS Code window, wake it, type 'look at signals/'."""
+    import pyautogui
+    import ctypes
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    WND = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+    BASE = os.path.dirname(os.path.abspath(__file__))
+    SDIR = os.path.join(BASE, "signals")
+    CFG = os.path.join(BASE, "agent_windows.json")
+    seen = set()
+
+    def find(kw):
+        f = []
+        def cb(h, _):
+            if user32.IsWindowVisible(h):
+                n = user32.GetWindowTextLengthW(h)
+                if n:
+                    b = ctypes.create_unicode_buffer(n+1)
+                    user32.GetWindowTextW(h, b, n+1)
+                    if kw in b.value and "Visual Studio Code" in b.value:
+                        f.append(h); return False
+            return True
+        user32.EnumWindows(WND(cb), 0)
+        return f[0] if f else None
+
+    def wake(h):
+        if user32.IsIconic(h): user32.ShowWindow(h, 9)
+        user32.ShowWindow(h, 5)
+        c, t = kernel32.GetCurrentThreadId(), user32.GetWindowThreadProcessId(h, None)
+        user32.AttachThreadInput(c, t, True)
+        user32.SetForegroundWindow(h); user32.BringWindowToTop(h)
+        user32.AttachThreadInput(c, t, False)
+        time.sleep(0.3)
+        cn = kernel32.GetConsoleWindow()
+        if cn: user32.ShowWindow(cn, 6)
+        r = (ctypes.c_int*4)()
+        ctypes.windll.dwmapi.DwmGetWindowAttribute(h, 9, ctypes.byref(r), ctypes.sizeof(r))
+        wx, wy, ww, wh = r[0], r[1], r[2]-r[0], r[3]-r[1]
+        pyautogui.click(wx+int(ww*0.60), wy+int(wh*0.65), clicks=3, interval=0.1)
+        time.sleep(0.5)
+        pyautogui.write("look at signals/", interval=0.05)
+        time.sleep(0.5)
+        pyautogui.click(wx+int(ww*0.79), wy+int(wh*0.70))
+        if cn: user32.ShowWindow(cn, 9)
+
+    log.info("Watcher loop started (in-process)")
+    while True:
+        await asyncio.sleep(2)
+        if not os.path.isdir(SDIR) or not os.path.exists(CFG): continue
+        with open(CFG) as f:
+            wm = {k:v for k,v in json.loads(f.read()).items() if not k.startswith("_") and v}
+        for fn in os.listdir(SDIR):
+            if not fn.endswith(".json"): continue
+            agent = fn.replace(".json",""); sp = os.path.join(SDIR, fn)
+            k = (agent, os.path.getmtime(sp))
+            if k in seen: continue
+            try:
+                with open(sp) as f: sig = json.loads(f.read())
+            except: continue
+            kw = wm.get(agent)
+            if not kw: seen.add(k); continue
+            h = find(kw)
+            if not h: seen.add(k); continue
+            log.info("Watcher: waking", agent=agent, task=sig.get("task_id","?"))
+            wake(h); seen.add(k)
 
 class AioHTTPHandler:
     """Minimal asyncio HTTP protocol handler."""
@@ -813,9 +889,10 @@ async def main():
     print(f"   SQLite database (a2a.db)")
     print(f"   Agents: push-based via WebSocket, no polling needed\n")
 
-    # Start cleanup task
+    # Start cleanup + watcher tasks
     # Cleanup disabled — "offline" is meaningless. Watcher handles liveness.
     # asyncio.create_task(cleanup_loop())
+    asyncio.create_task(watcher_loop())  # In-process desktop watcher
 
     # Run HTTP + WebSocket servers concurrently
     await asyncio.gather(

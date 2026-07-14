@@ -192,17 +192,45 @@ register and submit tasks from any network. A persistent tunnel management scrip
 
 ## 7. Results
 
-In production testing across 40+ tasks, the OS-level wake-up pipeline achieved:
+### 7.1 Production Metrics
+
+In production testing across 100+ tasks with 5 agents, the OS-level wake-up pipeline achieved:
 
 - **Wake latency**: < 3 seconds from task creation to Claude receiving the trigger
-- **Idle token cost**: 0 (watcher uses only bash `sleep` and file checks)
+- **Idle token cost**: 0 (PowerShell watcher uses only `sleep` and file checks)
 - **Success rate**: 100% when target window is visible and Claude Code is open
-- **False wake-ups**: 0 (signal files are agent-specific and consumed after processing)
+- **False wake-ups**: 0 (signal files are agent-specific; PID lock prevents duplicate watchers)
 
-The QualityEvaluator detected:
+### 7.2 Four-Agent Relay Chain
+
+A weekly report relay was executed across all four worker agents:
+QualityEvaluator → Claude → BPTtrain → BPT_Data_Check (final compiler).
+Each agent received a wake-up signal, was automatically activated via the OS-level
+pipeline, appended their section, and the server's `_notify_next_in_pipeline`
+triggered the next agent. All four completed within 3 minutes with 1,200-1,800
+character reports each.
+
+### 7.3 Quality Detection Results
+
+The QualityEvaluator's 8-dimension engine detected across the task corpus:
 - W601 self-evaluation loops (QE evaluating QE with template output)
 - STUCK agents producing identical outputs ≥3 times
 - E503 empty outputs from thin agent scripts
+- 7 critical issues in a comprehensive platform code audit (2 P0, 3 P1, 2 P2)
+
+### 7.4 Real Hermes Integration
+
+The Nous Research Hermes Agent (`/d/Hermes`) was integrated as the platform
+orchestrator, replacing thin Python scripts. Hermes provides: persistent memory,
+30+ pre-installed skills, cron scheduling, sub-agent delegation, browser control,
+and cross-platform messaging. A bridge script (`hermes_bridge.py`) connects
+A2A chat to Hermes CLI with session persistence via `--resume`.
+
+### 7.5 Thin Agent Elimination
+
+A server-side verification gate was added: agents with `verified=False` receive
+`AGENT_NOT_VERIFIED` (403) on auto-claim attempts. All thin script agents were
+removed, ensuring only real AI agents with actual tools operate on the platform.
 
 ## 8. Limitations and Future Work
 
