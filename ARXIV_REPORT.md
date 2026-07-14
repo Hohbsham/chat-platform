@@ -5,7 +5,7 @@
 ## Abstract
 
 We present an autonomous multi-agent platform for code quality inspection that achieves
-zero-token idle cost through OS-level window manipulation. The system bypasses webview
+zero-API-token idle cost through OS-level window manipulation. The system bypasses webview
 sandbox restrictions by using Win32 API calls to directly control VS Code windows,
 enabling fully unattended agent wake-up. Unlike conventional polling-based approaches
 that incur continuous API costs, our platform uses a signal-file notification system
@@ -27,7 +27,7 @@ The rise of large language model (LLM)-powered coding assistants has enabled a n
 paradigm of autonomous software agents. However, persistent background agents face a
 fundamental cost tension: continuous polling burns API tokens even when idle, while
 passive notification mechanisms require user interaction to wake the agent. We present
-a solution that achieves the best of both worlds—zero-token idle cost through OS-level
+a solution that achieves the best of both worlds—zero-API-token idle cost through OS-level
 window automation.
 
 ### 1.1 Background: The Sandbox Problem
@@ -139,7 +139,7 @@ We explored eight notification approaches before arriving at the final architect
 | 5 | Hub + Watcher | ✅ | Deployed as fallback mechanism |
 | 6 | MCP Channel | ⏸️ | Awaiting upstream support |
 | 7 | UserPromptSubmit Hook | ✅ | Primary: fires on user submission |
-| 8 | OS-Level Wake-Up | ✅ | Push-latency, zero-token idle |
+| 8 | OS-Level Wake-Up | ✅ | Push-latency, zero-API-token idle |
 
 ### 4.1 Sentinel Guard Filter
 
@@ -253,17 +253,21 @@ removed, ensuring only real AI agents with actual tools operate on the platform.
 We have demonstrated that OS-level window manipulation provides a viable, cost-efficient
 wake-up mechanism for autonomous AI coding agents. By combining Win32 API calls with
 calibrated mouse-click sequences, we bypass webview sandbox restrictions without
-compromising security. The resulting platform achieves zero-token idle cost while
+compromising security. The resulting platform achieves zero-API-token idle cost while
 maintaining push-latency wake-up, enabling truly unattended multi-agent operation.
 The architecture serves as a reference for building cost-efficient autonomous agent
 systems that can operate continuously without human supervision.
 
 ## References
 
-1. Microsoft Win32 API Documentation: SetForegroundWindow, AttachThreadInput
-2. Anthropic Claude Code Documentation: Hooks, Settings, VS Code Extension
-3. Python pyautogui: Cross-platform GUI automation library
-4. Serveo: Free SSH-based HTTPS tunneling service
+1. Nous Research. Hermes Agent: The Self-Improving AI Agent Framework. 2024-2026. https://github.com/NousResearch/hermes-agent
+2. Wu, Q., et al. AutoGen: Enabling Next-Gen LLM Applications via Multi-Agent Conversation. 2023. arXiv:2308.08155
+3. Chase, H. LangChain: Building Applications with LLMs through Composability. 2022. https://github.com/langchain-ai/langchain
+4. Yang, J., et al. SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering. 2024. arXiv:2405.15793
+5. Microsoft Win32 API Documentation: SetForegroundWindow, AttachThreadInput
+6. Anthropic Claude Code Documentation: Hooks, Settings, VS Code Extension
+7. Python pyautogui: Cross-platform GUI automation library
+8. Serveo: Free SSH-based HTTPS tunneling service. https://serveo.net
 
 ---
 
