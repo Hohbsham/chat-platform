@@ -35,6 +35,87 @@ def api_get(path):
         return []
 
 
+# ── WeCom push ──────────────────────────────────────────────────
+
+def _wecom_url():
+    """Read the group-bot webhook from .env. None if not configured."""
+    path = os.path.join(BASE_DIR, ".env")
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("WECOM_WEBHOOK_URL"):
+                    return line.split("=", 1)[1].strip() or None
+    except Exception:
+        pass
+    return None
+
+
+WECOM_URL = _wecom_url()
+
+
+def notify_user(text, markdown=True):
+    """Push a message to the operator's WeCom.
+
+    The platform chat only reaches the operator if they happen to be looking
+    at the page. This is the channel that actually gets their attention, so
+    it is reserved for things worth interrupting them over.
+    """
+    if not WECOM_URL:
+        return False
+    kind = "markdown" if markdown else "text"
+    body = {"msgtype": kind, kind: {"content": text[:4000]}}
+    try:
+        req = urllib.request.Request(
+            WECOM_URL, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"})
+        r = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        if r.get("errcode") != 0:
+            print(f"[Hermes WeCom] send failed: {r}", flush=True)
+            return False
+        return True
+    except Exception as e:
+        print(f"[Hermes WeCom] send error: {e}", flush=True)
+        return False
+
+
+def drain_inbox():
+    """
+    Consume completion/failure events the server queued for us.
+
+    The server writes one event per task terminal state (complete /
+    auto_complete / fail). Consuming marks them read so each event is
+    handled exactly once, even across Hermes restarts.
+
+    Returns the list of events so the caller can decide on follow-up work.
+    """
+    r = api_get("/api/hermes/inbox?consume=1")
+    if not isinstance(r, dict):
+        return []
+    events = r.get("events", [])
+    for e in events:
+        icon = {"task_complete": "[DONE]", "task_auto_complete": "[AUTO]",
+                "task_fail": "[FAIL]"}.get(e.get("event"), "[?]")
+        print(f"[Hermes] {icon} {e.get('agent','?')} — {e.get('title','')[:60]}")
+        if e.get("event") == "task_fail":
+            print(f"         error: {e.get('error','')[:200]}")
+        elif e.get("result"):
+            print(f"         result: {e.get('result','')[:200]}")
+
+        agent = e.get("agent", "?")
+        title = (e.get("title", "") or "")[:60]
+        if e.get("event") == "task_fail":
+            notify_user(
+                f"**[任务失败]** {agent}\n"
+                f"> {title}\n"
+                f"错误：<font color=\"warning\">{(e.get('error','') or '')[:300]}</font>")
+        else:
+            notify_user(
+                f"**[任务完成]** {agent}\n"
+                f"> {title}\n"
+                f"{(e.get('result','') or '')[:400]}")
+    return events
+
+
 # ── Hermes AI integration ───────────────────────────────────────
 
 def hermes_think(task_title, task_desc, agent_name, role, goal, backstory, capabilities):
@@ -375,6 +456,9 @@ def run_hermes_agent(name="Hermes", role="Platform Operations Director",
     # WebSocket push listener — wake up on pipeline advance
     import threading as _thr, asyncio as _aio
     ws_trigger = _thr.Event()
+    # Set before the listener thread starts: it reads `running` immediately,
+    # and would hit an unbound-variable error if we assigned it further down.
+    running = True
 
     def _ws_listen():
         try:
@@ -403,7 +487,18 @@ def run_hermes_agent(name="Hermes", role="Platform Operations Director",
     _ws_listen()
     print(f"[Hermes Agent] WebSocket listener started on ws://localhost:8766")
 
-    running = True
+    _pending = len([t for t in (api_get("/api/tasks") or [])
+                    if isinstance(t, dict) and t.get("status") == "pending"])
+    _online = [a.get("name") for a in (api_get("/api/agents") or [])
+               if isinstance(a, dict) and a.get("status") == "online"]
+    notify_user(
+        f"**[Hermes 上线]** `{agent_id}`\n"
+        f"WebSocket `:8766` 已连接 · Gateway `:8767` 就绪\n"
+        f"在线 agent：{len(_online)} 个\n"
+        f"待处理任务：<font color=\"comment\">{_pending}</font> 条\n"
+        f"任务完成/失败会推到这里。")
+    print(f"[Hermes Agent] WeCom push: {'ON' if WECOM_URL else 'OFF (no .env url)'}")
+
     last_orchestration = 0
     orchestrate_interval = poll_interval * 2
 
@@ -414,6 +509,15 @@ def run_hermes_agent(name="Hermes", role="Platform Operations Director",
             # Push wake-up: if we were woken by a push, also check chat
             if ws_trigger.is_set():
                 ws_trigger.clear()
+                last_orchestration = 0
+
+            # ── Inbox: learn which agents just finished (or failed) ──
+            # Server queues an event on every task terminal state. Draining it
+            # here is how Hermes stays aware without polling all 200+ tasks.
+            finished = drain_inbox()
+            if finished:
+                # A finished dependency may have unblocked follow-up work —
+                # re-run orchestration on the next tick instead of waiting.
                 last_orchestration = 0
 
             # ── Assignment Fixer: ensure all pending tasks have proper assigned_to ──

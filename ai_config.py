@@ -105,6 +105,63 @@ def get_base_url():
     return url.rstrip("/")
 
 
+def list_providers():
+    """Return dict of all available providers from config files.
+
+    Keys are provider names (e.g. 'deepseek', 'moonshot', 'bailian').
+    Values are {api_key, base_url, models[]} dicts.
+    """
+    providers = {}
+    for path in _CONFIG_PATHS:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            continue
+        for name, pcfg in cfg.get("models", {}).get("providers", {}).items():
+            if name not in providers:
+                providers[name] = {
+                    "api_key": pcfg.get("apiKey", ""),
+                    "base_url": pcfg.get("baseUrl", ""),
+                    "models": [m["id"] for m in pcfg.get("models", [])],
+                }
+    return providers
+
+
+def get_provider_config(provider_name=None):
+    """Get config for a specific provider.
+
+    Priority:
+    1. Explicit provider_name argument
+    2. AI_PROVIDER environment variable
+    3. Default provider from openclaw.json agents.defaults.model
+
+    Returns {api_key, base_url, model} or empty dict if provider not found.
+    """
+    if provider_name is None:
+        provider_name = os.environ.get("AI_PROVIDER", "")
+
+    providers = list_providers()
+
+    # Resolve provider name
+    if not provider_name:
+        # Fall back to default from openclaw.json
+        default_cfg = get_config()
+        model = default_cfg.get("model", "")
+        provider_name = model.split("/")[0] if "/" in model else "deepseek"
+
+    pcfg = providers.get(provider_name)
+    if not pcfg:
+        return {}
+
+    return {
+        "api_key": pcfg["api_key"],
+        "base_url": pcfg["base_url"],
+        "model": pcfg["models"][0] if pcfg["models"] else "",
+        "provider": provider_name,
+    }
+
+
 def clear_cache():
     """Force re-reading config on next get_config() call."""
     global _CONFIG

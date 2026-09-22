@@ -1,185 +1,157 @@
 """
-Desktop Watcher — runs in user's terminal session.
-Watches signals/ directory. When a signal appears, directly wakes the target
-VS Code window and triggers Claude — all in one process (no subprocess).
+Desktop Watcher — the missing link between signals and window wake-up.
 
-Run once:
-  python d:\ClothesNetData\chat-platform\scripts\desktop_watcher.py
+Polls signals/ for new task signals. For each one, runs wake_vscode.py to
+pull that agent's VS Code window to the front and inject the task.
+
+Must run in a REAL terminal session (not a detached process) — pyautogui
+needs desktop focus to move the mouse.
+
+Usage:
+  python scripts/desktop_watcher.py              # 3s poll
+  python scripts/desktop_watcher.py --interval 5
+  python scripts/desktop_watcher.py --dry-run    # log only, no mouse
+
+Why sequential: wake_vscode.py takes over the mouse and keyboard. Two
+concurrent wake-ups would fight over focus and type into the wrong window.
 """
-import os, sys, time, json, ctypes
-import pyautogui
+import argparse
+import glob
+import json
+import os
+import subprocess
+import sys
+import time
+
+sys.stdout.reconfigure(encoding="utf-8")
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SIGNALS = os.path.join(BASE, "signals")
-CONFIG = os.path.join(BASE, "agent_windows.json")
+SIGNALS_DIR = os.path.join(BASE, "signals")
+WAKE_SCRIPT = os.path.join(BASE, "scripts", "wake_vscode.py")
+WINDOWS_CFG = os.path.join(BASE, "agent_windows.json")
 
-user32 = ctypes.windll.user32
-kernel32 = ctypes.windll.kernel32
-
-
-def load_config():
-    if os.path.exists(CONFIG):
-        with open(CONFIG, "r", encoding="utf-8") as f:
-            return {k: v for k, v in json.loads(f.read()).items()
-                    if not k.startswith("_")}
-    return {}
+# A signal older than this is stale — the agent already saw it or gave up.
+SIGNAL_TTL = 3600
+# Don't re-wake the same agent within this window, even if the signal lingers.
+REWAKE_COOLDOWN = 120
 
 
-def find_vscode_window(keyword):
-    found = []
-    def cb(hwnd, _):
-        if user32.IsWindowVisible(hwnd):
-            l = user32.GetWindowTextLengthW(hwnd)
-            if l > 0:
-                b = ctypes.create_unicode_buffer(l + 1)
-                user32.GetWindowTextW(hwnd, b, l + 1)
-                if keyword in b.value and "Visual Studio Code" in b.value:
-                    found.append(hwnd)
-                    return False
-        return True
-    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
-    user32.EnumWindows(WNDENUMPROC(cb), 0)
-    return found[0] if found else None
-
-
-def force_foreground(hwnd):
-    if not hwnd: return False
-    if user32.IsIconic(hwnd):
-        user32.ShowWindow(hwnd, 9)
-    user32.ShowWindow(hwnd, 5)
-    current = kernel32.GetCurrentThreadId()
-    target = user32.GetWindowThreadProcessId(hwnd, None)
-    user32.AttachThreadInput(current, target, True)
-    user32.SetForegroundWindow(hwnd)
-    user32.BringWindowToTop(hwnd)
-    user32.AttachThreadInput(current, target, False)
-    time.sleep(0.3)
-    return True
-
-
-def click_submit(hwnd):
-    rect = (ctypes.c_int * 4)()
-    ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(rect), ctypes.sizeof(rect))
-    wx, wy = rect[0], rect[1]
-    ww, wh = rect[2] - wx, rect[3] - wy
-    # Single deliberate click — double-click cancels the submit
-    sx, sy = wx + int(ww * 0.79), wy + int(wh * 0.70)
-    pyautogui.moveTo(sx, sy, duration=0.1)
-    time.sleep(0.1)
-    pyautogui.mouseDown(sx, sy)
-    time.sleep(0.05)
-    pyautogui.mouseUp(sx, sy)
-
-
-def wake_agent(hwnd):
-    """Wake up the target VS Code window — all in-process."""
-    if not force_foreground(hwnd):
-        return False
-
-    # Minimize our own console so it doesn't steal pyautogui focus
-    console = kernel32.GetConsoleWindow()
-    if console:
-        user32.ShowWindow(console, 6)  # SW_MINIMIZE
-
+def load_known_agents():
+    """Agents that have a window mapping — only these can be woken."""
     try:
-        rect = (ctypes.c_int * 4)()
-        ctypes.windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(rect), ctypes.sizeof(rect))
-        wx, wy = rect[0], rect[1]
-        ww, wh = rect[2] - wx, rect[3] - wy
+        with open(WINDOWS_CFG, encoding="utf-8") as f:
+            cfg = json.load(f)
+        return {k for k in cfg if not k.startswith("_")}
+    except Exception:
+        return set()
 
-        # Minimize our console so pyautogui targets VS Code not terminal
-        console = kernel32.GetConsoleWindow()
-        if console:
-            user32.ShowWindow(console, 6)  # SW_MINIMIZE
-            time.sleep(0.3)
 
-        # Triple-click Claude input box at (60%, 65%) to ensure focus
-        ix, iy = wx + int(ww * 0.60), wy + int(wh * 0.65)
-        pyautogui.click(ix, iy, clicks=3, interval=0.1)
-        time.sleep(0.5)
-        # Type trigger text
-        pyautogui.write('look at signals/', interval=0.05)
-        time.sleep(0.5)
-        # Single submit click at (79%, 70%)
-        sx, sy = wx + int(ww * 0.79), wy + int(wh * 0.70)
-        pyautogui.moveTo(sx, sy, duration=0.1)
-        pyautogui.mouseDown(sx, sy)
-        time.sleep(0.05)
-        pyautogui.mouseUp(sx, sy)
+def read_signal(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def wake(agent, dry_run=False):
+    """Run wake_vscode.py for one agent. Blocks until done (~20s)."""
+    if dry_run:
+        print(f"    [dry-run] would wake {agent}")
         return True
-    finally:
-        # Restore console
-        if console:
-            user32.ShowWindow(console, 9)  # SW_RESTORE
+    try:
+        r = subprocess.run(
+            [sys.executable, WAKE_SCRIPT, agent],
+            cwd=BASE, capture_output=True, timeout=90, text=True,
+        )
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout or "").strip()[:200]
+            print(f"    [fail] {agent} (exit {r.returncode}) {err}")
+            return False
+        return True
+    except subprocess.TimeoutExpired:
+        print(f"    [timeout] {agent} — wake took >90s")
+        return False
+    except Exception as e:
+        print(f"    [error] {agent}: {e}")
+        return False
 
 
 def main():
-    # PID lock — prevent duplicate watchers
-    import tempfile
-    lockfile = os.path.join(tempfile.gettempdir(), "desktop_watcher.lock")
-    if os.path.exists(lockfile):
-        try:
-            with open(lockfile) as f:
-                old_pid = int(f.read().strip())
-            import ctypes
-            SYNCHRONIZE = 0x100000
-            handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, old_pid)
-            if handle:
-                ctypes.windll.kernel32.CloseHandle(handle)
-                print(f"[Watcher] Already running (PID {old_pid}). Exiting.")
-                sys.exit(0)
-        except Exception:
-            os.remove(lockfile)
-    with open(lockfile, "w") as f:
-        f.write(str(os.getpid()))
+    ap = argparse.ArgumentParser(description="A2A desktop watcher")
+    ap.add_argument("--interval", type=float, default=3.0,
+                    help="seconds between polls (default 3)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="log what would happen, don't touch the mouse")
+    args = ap.parse_args()
 
-    config = load_config()
-    print(f"[Watcher] Agents: {list(config.keys())}")
-    print(f"[Watcher] Watching signals/ ...")
+    known = load_known_agents()
+    print("=" * 56)
+    print("  A2A Desktop Watcher")
+    print(f"  signals: {SIGNALS_DIR}")
+    print(f"  agents:  {', '.join(sorted(known)) or '(none configured)'}")
+    print(f"  poll:    {args.interval}s" + ("  [DRY RUN]" if args.dry_run else ""))
+    print("=" * 56)
+    print()
 
-    processed = set()  # Track processed task IDs to prevent re-trigger loops
+    last_wake = {}  # agent -> timestamp of last wake attempt
 
     while True:
-        if not os.path.isdir(SIGNALS):
-            time.sleep(2)
-            continue
+        try:
+            # Reload the window map each cycle so newly registered agents
+            # are picked up without a restart.
+            known = load_known_agents() or known
+            now = time.time()
 
-        for agent, keyword in config.items():
-            sig_path = os.path.join(SIGNALS, f"{agent}.json")
-            if not os.path.exists(sig_path):
-                continue
+            for path in sorted(glob.glob(os.path.join(SIGNALS_DIR, "*.json"))):
+                name = os.path.basename(path)
+                if name.startswith("."):
+                    continue  # .chain_state.json and friends
+                agent = name[:-5]  # strip .json
 
-            try:
-                with open(sig_path, "r", encoding="utf-8") as f:
-                    sig = json.load(f)
-            except Exception:
-                continue
+                if agent not in known:
+                    continue
 
-            tid = sig.get("task_id", "?")
-            title = sig.get("title", "?")
+                sig = read_signal(path)
+                if not sig:
+                    continue
 
-            # Skip already-processed signals
-            if (agent, tid) in processed:
-                continue
+                age = now - sig.get("ts", 0)
+                if age > SIGNAL_TTL:
+                    continue
 
-            print(f"\n[Watcher] {agent}: {title[:60]}")
-            processed.add((agent, tid))  # Mark immediately to prevent loops
+                # The hook writes {agent}.json.injected once Claude has seen
+                # the task. If that marker is newer than the signal, we're done.
+                injected = path + ".injected"
+                if os.path.exists(injected):
+                    try:
+                        if os.path.getmtime(injected) >= os.path.getmtime(path):
+                            continue
+                    except OSError:
+                        pass
 
-            hwnd = find_vscode_window(keyword)
-            if not hwnd:
-                print(f"          Window '{keyword}' NOT FOUND")
-                # Still delete signal to prevent loop — hook won't fire anyway
-                try: os.remove(sig_path)
-                except: pass
-                continue
+                if now - last_wake.get(agent, 0) < REWAKE_COOLDOWN:
+                    continue
 
-            print(f"          Waking {keyword} window...")
-            wake_agent(hwnd)
-            print(f"          Done.")
-            # Don't rename/delete — check_signal.py hook needs the signal file to inject task
-            time.sleep(3)
+                title = (sig.get("title") or "")[:60]
+                print(f"[{time.strftime('%H:%M:%S')}] signal: {agent}")
+                print(f"    task: {title}")
+                last_wake[agent] = now
+                if wake(agent, args.dry_run):
+                    print(f"    [ok] {agent} woken")
+                print()
 
-        time.sleep(2)
+        except KeyboardInterrupt:
+            print("\n[watcher] stopped")
+            return
+        except Exception as e:
+            print(f"[watcher] cycle error: {e}")
+
+        try:
+            time.sleep(args.interval)
+        except KeyboardInterrupt:
+            print("\n[watcher] stopped")
+            return
 
 
 if __name__ == "__main__":

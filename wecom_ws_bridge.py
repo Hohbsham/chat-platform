@@ -158,6 +158,7 @@ class WeComBridge:
     async def send_message(self, user_id: str, content: str):
         """Send markdown message back to WeCom user."""
         if not self.ws:
+            print(f"[WeCom] send SKIPPED — no ws connection (touser={user_id[:20]})")
             return False
         frame = self._make_frame("aibot_send_msg", {
             "msgid": uuid.uuid4().hex,
@@ -167,6 +168,7 @@ class WeComBridge:
         })
         try:
             await self.ws.send(json.dumps(frame, ensure_ascii=False))
+            print(f"[WeCom] -> send to {user_id[:20]}: {content[:60]!r}")
             return True
         except Exception as e:
             print(f"[WeCom] Send error: {e}")
@@ -229,8 +231,16 @@ class WeComBridge:
                         print(f"[WeCom] Event: {etype}")
 
                     else:
-                        # Could be response to our send, etc.
-                        pass
+                        # Response to our own send (or an error回执). Surfacing
+                        # these is the only way to see why a reply didn't land.
+                        hdr = payload.get("headers", {}) or {}
+                        bdy = payload.get("body", {}) or {}
+                        errcode = hdr.get("errcode", bdy.get("errcode"))
+                        errmsg = hdr.get("errmsg", bdy.get("errmsg", ""))
+                        if errcode not in (None, 0, "0"):
+                            print(f"[WeCom] <- {cmd} ERROR errcode={errcode} errmsg={errmsg}")
+                        else:
+                            print(f"[WeCom] <- {cmd} {json.dumps(payload, ensure_ascii=False)[:300]}")
 
             except websockets.ConnectionClosed:
                 print(f"[WeCom] Disconnected -- reconnecting in {backoff}s...")
@@ -311,6 +321,8 @@ class WeComBridge:
 
         agents = a2a_get("/api/agents")
         online = [a.get("name", "") for a in agents if a.get("status") == "online"]
+        print(f"[WeCom] reply-path: touser={from_user!r} ws={'open' if self.ws else 'NONE'} "
+              f"online={len(online)} hermes={'Hermes' in online}")
 
         if "OpenClaw" in online or "Hermes" in online:
             await self.send_message(from_user,

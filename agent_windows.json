@@ -3,5 +3,7 @@
   "QualityEvaluator": "chat-platform",
   "Claude": ".claude",
   "BPTtrain": "garmageset_download",
-  "BPT_Data_Check": "服装自适应"
+  "BPT_Data_Check": "ClothesNetData",
+  "CVPaper": "cv-paper",
+  "MixData": "MIX"
 }

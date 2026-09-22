@@ -95,7 +95,6 @@ def start_all():
     procs["server"] = start_server()
     time.sleep(1)
     procs["hermes"] = start_hermes()
-    procs["hermes_bridge"] = launch("HermesBridge", ["hermes_bridge.py"])
     start_desktop_watcher()
 
     print(f"\n  A2A:      http://localhost:8765")

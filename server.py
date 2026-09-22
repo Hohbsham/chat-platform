@@ -90,20 +90,61 @@ def _fire_webhook(task_id, title, assigned_to):
         # Wake-up is handled by the desktop-side watcher (scripts/desktop_watcher.py).
         # Server cannot spawn GUI-automation reliably — it runs as a background process.
         # We only write the signal file here. The watcher detects it and runs wake_vscode.py.
+    except Exception as e:
+        import traceback
+        print(f"[WARN] _write_signal failed: {e}", flush=True)
+        traceback.print_exc()  # Best-effort; A2A DB is the truth
+
+
+def _load_model_router():
+    """Load capability → model mapping. Returns default route if not found."""
+    path = os.path.join(BASE_DIR, "model_router.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.loads(f.read())
     except Exception:
-        pass  # Best-effort; A2A DB is the truth
+        return {}
 
+def _resolve_model(capabilities):
+    """Find the highest-tier model for given capabilities. Returns (model_name, model_cmd) or (None, None)."""
+    router = _load_model_router()
+    routes = router.get("routes", {})
+    for cap in (capabilities or []):
+        if cap in routes:
+            r = routes[cap]
+            return r.get("model"), r.get("cmd")
+    return router.get("default"), router.get("default_cmd")
 
-def _write_signal(agent_name, task_id, title):
-    """Write a signal file so the agent's cron watcher wakes up."""
+def _write_signal(agent_name, task_id, title, capabilities=None, task=None):
+    """Write a signal file so the agent's watcher wakes up."""
     sig_dir = os.path.join(BASE_DIR, "signals")
     os.makedirs(sig_dir, exist_ok=True)
     sig_path = os.path.join(sig_dir, f"{agent_name}.json")
     try:
+        model, model_cmd = _resolve_model(capabilities)
+        sig = {"task_id": task_id, "title": title, "ts": time.time()}
+        if task:
+            desc = (task.get("description") or "")
+            # Inject _DONE instruction so agents know to write completion marker
+            done_hint = (
+                f"\n\n---\n⚡ When you complete this task, write a _DONE file:\n"
+                f'  echo "done" > D:\\ClothesNetData\\ppt_materials\\{agent_name}\\_DONE\n'
+                f"This auto-triggers the next pipeline stage."
+            )
+            sig["description"] = (desc + done_hint)[:2000]
+            sig["caps"] = (task.get("required_capabilities") or [])
+            sig["priority"] = task.get("priority", "normal")
+        if model_cmd:
+            sig["model"] = model
+            sig["model_cmd"] = model_cmd
         with open(sig_path, "w", encoding="utf-8") as f:
-            json.dump({"task_id": task_id, "title": title, "ts": time.time()}, f)
-    except Exception:
-        pass
+            json.dump(sig, f, ensure_ascii=False)
+    except Exception as e:
+        import traceback
+        print(f"[WARN] _write_signal failed: {e}", flush=True)
+        traceback.print_exc()
 
 # ── Claim lease enforcement ─────────────────────────────────────
 
@@ -169,6 +210,61 @@ def _notify_next_in_pipeline(completed_task_id):
         log.error("Pipeline notify error", error=str(e))
 
 
+HERMES_INBOX = os.path.join(BASE_DIR, "inbox", "hermes")
+
+
+def _notify_hermes(event, task, extra=None):
+    """
+    Append a completion/failure event to Hermes' inbox so the orchestrator
+    learns what agents finished without polling every task.
+
+    Hermes reads inbox/hermes/*.json on its poll cycle, then decides whether
+    to publish follow-up tasks. Writing a file (not an HTTP call) keeps this
+    non-blocking and survives Hermes restarts.
+    """
+    try:
+        os.makedirs(HERMES_INBOX, exist_ok=True)
+        task_id = task.get("task_id", "unknown")
+        record = {
+            "event": event,
+            "task_id": task_id,
+            "title": task.get("title", ""),
+            "agent": task.get("assigned_to") or task.get("completed_by", ""),
+            "status": task.get("status", ""),
+            "result": (task.get("result") or "")[:2000],
+            "error": task.get("error", ""),
+            "priority": task.get("priority", "normal"),
+            "capabilities": task.get("required_capabilities", []),
+            "context": task.get("context", []),
+            "ts": time.time(),
+        }
+        if extra:
+            record.update(extra)
+        # Timestamped filename keeps events ordered and collision-free
+        fname = f"{int(time.time() * 1000)}_{event}_{task_id[:12]}.json"
+        with open(os.path.join(HERMES_INBOX, fname), "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False)
+        log.info("Hermes notified", event=event, task_id=task_id[:12],
+                 agent=record["agent"][:20])
+        # Surface it on the dashboard event stream too
+        emit_event("hermes_notify", "System",
+                   f"Hermes 收到通知: {event} — {record['title'][:60]}",
+                   {"task_id": task_id, "event": event, "agent": record["agent"]})
+    except Exception as e:
+        log.error("Hermes notify error", error=str(e))
+
+
+def _cleanup_signal(agent_name):
+    """Delete the signal file when a task completes — agent is done."""
+    try:
+        sig_path = os.path.join(BASE_DIR, "signals", f"{agent_name}.json")
+        if os.path.exists(sig_path):
+            os.remove(sig_path)
+            log.info("Signal cleaned", agent=agent_name)
+    except Exception as e:
+        log.error("Signal cleanup error", error=str(e))
+
+
 async def _push_task_to_agents(task_id):
     """Find online agents that can handle this task and push to them."""
     task = db.task_find(task_id)
@@ -205,8 +301,8 @@ def _static_response(filename):
     path = os.path.join(BASE_DIR, filename)
     if not os.path.exists(path):
         return 404, {}, b"Not found"
-    ct = {"json": "application/json", "js": "application/javascript",
-          "png": "image/png", "ico": "image/x-icon",
+    ct = {"html": "text/html; charset=utf-8", "json": "application/json",
+          "js": "application/javascript", "png": "image/png", "ico": "image/x-icon",
           "css": "text/css"}.get(filename.rsplit(".", 1)[-1], "application/octet-stream")
     with open(path, "rb") as f:
         return 200, {"Content-Type": ct, "Access-Control-Allow-Origin": "*"}, f.read()
@@ -265,6 +361,33 @@ def handle_http(path, method, query, body_bytes):
             msgs = db.message_all(since)
             _log_req("GET", path, 200, start)
             return _json_response(msgs)
+
+        if path == "/api/hermes/inbox":
+            # Hermes polls this to learn which agents finished. ?consume=1
+            # moves the events to inbox/hermes/read/ so they arrive once.
+            consume = query.get("consume", ["0"])[0] in ("1", "true", "yes")
+            events = []
+            try:
+                if os.path.isdir(HERMES_INBOX):
+                    names = sorted(n for n in os.listdir(HERMES_INBOX)
+                                   if n.endswith(".json"))
+                    read_dir = os.path.join(HERMES_INBOX, "read")
+                    if consume:
+                        os.makedirs(read_dir, exist_ok=True)
+                    for n in names:
+                        src = os.path.join(HERMES_INBOX, n)
+                        try:
+                            with open(src, encoding="utf-8") as f:
+                                events.append(json.loads(f.read()))
+                            if consume:
+                                os.replace(src, os.path.join(read_dir, n))
+                        except Exception:
+                            continue
+            except Exception as e:
+                log.error("Hermes inbox read error", error=str(e))
+            _log_req("GET", path, 200, start)
+            return _json_response({"ok": True, "count": len(events),
+                                   "consumed": consume, "events": events})
 
         if path == "/api/agents":
             status_filter = query.get("status", [None])[0]
@@ -431,12 +554,12 @@ def handle_http(path, method, query, body_bytes):
             # ── Wake up assigned agent via signal + webhook ──
             assigned = task.get("assigned_to", "")
             if assigned:
-                _write_signal(assigned, task["task_id"], task["title"])
+                _write_signal(assigned, task["task_id"], task["title"], task.get("required_capabilities"), task)
                 _fire_webhook(task["task_id"], task["title"], assigned)
             return _json_response({"ok": True, "task": task})
 
         # Task actions: /api/tasks/<id>/<action>
-        if (m := re.match(r"^/api/tasks/([^/]+)/(claim|complete|fail|cancel|comment|approve)$", path)):
+        if (m := re.match(r"^/api/tasks/([^/]+)/(claim|complete|auto-complete|fail|cancel|comment|approve)$", path)):
             return _handle_task_action(m.group(1), m.group(2), data, start)
 
         # Auto-claim
@@ -472,6 +595,10 @@ def _handle_task_action(task_id, action, data, start):
     if action == "claim":
         if task["status"] not in ("pending", "input_required"):
             return _json_response({"ok": False, "error": f"Task is {task['status']}", "code": "INVALID_STATE"}, 400)
+        # Enforce assigned_to: only the assigned agent can claim
+        assigned = task.get("assigned_to", "")
+        if assigned and agent_name != assigned:
+            return _json_response({"ok": False, "error": f"Task assigned to {assigned}, not {agent_name}", "code": "NOT_YOUR_TASK"}, 403)
         if task["broadcast"]:
             db.agent_set_status(agent_id, "busy", task_id)
             emit_event("task_claim", agent_name, f"{agent_name} 参与广播: {task['title']}",
@@ -521,7 +648,36 @@ def _handle_task_action(task_id, action, data, start):
                       {"task_id": task_id, "completed_by": agent_id, "agent_name": agent_name, "result": result})
             # Wake up agents waiting on this task's completion
             _notify_next_in_pipeline(task_id)
+            # Tell Hermes so it can decide on follow-up work
+            _notify_hermes("task_complete", db.task_find(task_id),
+                           {"completed_by_agent": agent_name})
+            # Delete signal file — task is done, no need to re-wake
+            _cleanup_signal(agent_name)
         _log_req("POST", f"/api/tasks/{task_id}/complete", 200, start)
+        return _json_response({"ok": True, "task": db.task_find(task_id)})
+
+    elif action == "auto-complete":
+        # Auto-completion triggered by transcript_watcher — no agent auth required
+        source = data.get("source", "transcript_watcher")
+        confidence = data.get("confidence", 0.0)
+        evidence = data.get("evidence", "")
+        if task.get("status") in ("completed", "failed", "cancelled"):
+            return _json_response({"ok": False, "error": f"Task already {task['status']}", "code": "INVALID_STATE"}, 400)
+        agent_name = task.get("assigned_to", "")
+        db.task_update(task_id, status="completed",
+                      result=f"[auto-complete by {source}] {evidence}",
+                      completed_by=f"auto:{source}", completed_at=now)
+        if agent_name:
+            db.agent_set_status(agent_name, "online", None)
+        emit_event("task_complete", source,
+                  f"[自动完成] {task.get('title','')} (置信度:{confidence:.0%})",
+                  {"task_id": task_id, "source": source, "confidence": confidence, "evidence": evidence})
+        _notify_next_in_pipeline(task_id)
+        _notify_hermes("task_auto_complete", db.task_find(task_id),
+                       {"source": source, "confidence": confidence})
+        if agent_name:
+            _cleanup_signal(agent_name)
+        _log_req("POST", f"/api/tasks/{task_id}/auto-complete", 200, start)
         return _json_response({"ok": True, "task": db.task_find(task_id)})
 
     elif action == "fail":
@@ -532,6 +688,9 @@ def _handle_task_action(task_id, action, data, start):
         db.agent_set_status(agent_id, "online", None)
         emit_event("task_fail", agent_name, f"[失败] {task['title']}",
                   {"task_id": task_id, "agent_name": agent_name, "error": error})
+        # Hermes needs failures too — it may retry or reroute the work
+        _notify_hermes("task_fail", db.task_find(task_id),
+                       {"failed_by_agent": agent_name})
         _log_req("POST", f"/api/tasks/{task_id}/fail", 200, start)
         return _json_response({"ok": True, "task": db.task_find(task_id)})
 
@@ -715,8 +874,10 @@ async def ws_handler(websocket):
 
             except json.JSONDecodeError:
                 pass
-    except Exception:
-        pass
+    except Exception as e:
+        import traceback
+        print(f"[WARN] _write_signal failed: {e}", flush=True)
+        traceback.print_exc()
     finally:
         ws_clients.pop(client_id, None)
         if registered_agent_id:
@@ -745,7 +906,8 @@ async def cleanup_loop():
 # ── Desktop watcher (in-process — no external process needed) ──
 
 async def watcher_loop():
-    """Every 2s: scan signals/, find VS Code window, wake it, type 'look at signals/'."""
+    """Primary desktop watcher (5s poll). Scans signals/, wakes VS Code agent windows.
+    Replaces the old PowerShell watcher.ps1 — single watcher, single mutex."""
     import pyautogui
     import ctypes
     user32 = ctypes.windll.user32
@@ -756,60 +918,136 @@ async def watcher_loop():
     CFG = os.path.join(BASE, "agent_windows.json")
     seen = set()
 
+    # Global mutex — prevents duplicate watcher instances from ghost-clicking
+    try:
+        import win32event, win32api, winerror
+        _wake_mutex = win32event.CreateMutex(None, False, 'Global_A2A_Watcher_Mutex')
+        _has_mutex = True
+    except ImportError:
+        _wake_mutex = None
+        _has_mutex = False
+
+    CONSOLE_CLASS = "ConsoleWindowClass"
+
+    def hide_all_consoles():
+        """Hide console windows so pyautogui clicks VS Code, not PowerShell."""
+        def _cb(h, _):
+            if user32.IsWindowVisible(h):
+                buf = ctypes.create_unicode_buffer(32)
+                user32.GetClassNameW(h, buf, 32)
+                if buf.value == CONSOLE_CLASS:
+                    user32.ShowWindow(h, 0)
+            return True
+        user32.EnumWindows(WND(_cb), 0)
+
     def find(kw):
         f = []
         def cb(h, _):
             if user32.IsWindowVisible(h):
                 n = user32.GetWindowTextLengthW(h)
                 if n:
-                    b = ctypes.create_unicode_buffer(n+1)
-                    user32.GetWindowTextW(h, b, n+1)
+                    b = ctypes.create_unicode_buffer(n + 1)
+                    user32.GetWindowTextW(h, b, n + 1)
                     if kw in b.value and "Visual Studio Code" in b.value:
                         f.append(h); return False
             return True
         user32.EnumWindows(WND(cb), 0)
         return f[0] if f else None
 
+    def ensure_foreground(hwnd):
+        """Force target to foreground — retry up to 5 times, hiding consoles each time."""
+        for _ in range(5):
+            hide_all_consoles()
+            time.sleep(0.15)
+            user32.SetForegroundWindow(hwnd)
+            user32.BringWindowToTop(hwnd)
+            time.sleep(0.2)
+            if user32.GetForegroundWindow() == hwnd:
+                return True
+        return False
+
     def wake(h):
-        if user32.IsIconic(h): user32.ShowWindow(h, 9)
+        """Wake a VS Code window: foreground -> click editor -> type -> submit."""
+        if user32.IsIconic(h):
+            user32.ShowWindow(h, 9)
         user32.ShowWindow(h, 5)
+
         c, t = kernel32.GetCurrentThreadId(), user32.GetWindowThreadProcessId(h, None)
         user32.AttachThreadInput(c, t, True)
-        user32.SetForegroundWindow(h); user32.BringWindowToTop(h)
+        user32.SetForegroundWindow(h)
+        user32.BringWindowToTop(h)
         user32.AttachThreadInput(c, t, False)
-        time.sleep(0.3)
-        cn = kernel32.GetConsoleWindow()
-        if cn: user32.ShowWindow(cn, 6)
-        r = (ctypes.c_int*4)()
+
+        if not ensure_foreground(h):
+            log.warning("Watcher: failed to get foreground")
+
+        r = (ctypes.c_int * 4)()
         ctypes.windll.dwmapi.DwmGetWindowAttribute(h, 9, ctypes.byref(r), ctypes.sizeof(r))
-        wx, wy, ww, wh = r[0], r[1], r[2]-r[0], r[3]-r[1]
-        pyautogui.click(wx+int(ww*0.60), wy+int(wh*0.65), clicks=3, interval=0.1)
+        wx, wy, ww, wh = r[0], r[1], r[2] - r[0], r[3] - r[1]
+
+        # Click editor area first (avoid Terminal menu at wy+10)
+        pyautogui.click(wx + int(ww * 0.50), wy + 100)
+        time.sleep(0.3)
+        # Click Claude panel center
+        pyautogui.click(wx + int(ww * 0.80), wy + int(wh * 0.50))
         time.sleep(0.5)
+        # Type trigger
         pyautogui.write("look at signals/", interval=0.05)
         time.sleep(0.5)
-        pyautogui.click(wx+int(ww*0.79), wy+int(wh*0.70))
-        if cn: user32.ShowWindow(cn, 9)
+        # Click submit
+        pyautogui.click(wx + int(ww * 0.79), wy + int(wh * 0.70))
 
-    log.info("Watcher loop started (in-process)")
+    log.info("Watcher loop started (primary, 5s poll, mutex=%s)", _has_mutex)
     while True:
-        await asyncio.sleep(2)
-        if not os.path.isdir(SDIR) or not os.path.exists(CFG): continue
-        with open(CFG) as f:
-            wm = {k:v for k,v in json.loads(f.read()).items() if not k.startswith("_") and v}
+        await asyncio.sleep(5)  # Primary watcher — was 10s, now 5s
+        if not os.path.isdir(SDIR) or not os.path.exists(CFG):
+            continue
+        with open(CFG, encoding="utf-8") as f:
+            wm = {k: v for k, v in json.loads(f.read()).items() if not k.startswith("_") and v}
         for fn in os.listdir(SDIR):
-            if not fn.endswith(".json"): continue
-            agent = fn.replace(".json",""); sp = os.path.join(SDIR, fn)
+            if not fn.endswith(".json"):
+                continue
+            # Skip already-injected signals (hook already processed them)
+            sp = os.path.join(SDIR, fn)
+            if os.path.exists(sp + ".injected"):
+                continue
+            agent = fn.replace(".json", "")
             k = (agent, os.path.getmtime(sp))
-            if k in seen: continue
+            if k in seen:
+                continue
             try:
-                with open(sp) as f: sig = json.loads(f.read())
-            except: continue
+                with open(sp) as f:
+                    sig = json.loads(f.read())
+            except Exception:
+                continue
             kw = wm.get(agent)
-            if not kw: seen.add(k); continue
+            if not kw:
+                seen.add(k)
+                continue
             h = find(kw)
-            if not h: seen.add(k); continue
-            log.info("Watcher: waking", agent=agent, task=sig.get("task_id","?"))
-            wake(h); seen.add(k)
+            if not h:
+                seen.add(k)
+                continue
+
+            # Mutex guard — only one wake call at a time
+            if _wake_mutex:
+                rc = win32event.WaitForSingleObject(_wake_mutex, 0)
+                if rc != win32event.WAIT_OBJECT_0:
+                    continue  # Another wake is in progress
+
+            log.info("Watcher: waking", agent=agent, task=sig.get("task_id", "?"))
+            try:
+                wake(h)
+            except Exception as e:
+                log.error("Watcher: wake failed", agent=agent, error=str(e))
+            finally:
+                if _wake_mutex:
+                    win32event.ReleaseMutex(_wake_mutex)
+
+            seen.add(k)
+            # NOTE: Do NOT delete signal file here.
+            # check_signal.py hook will mark it as injected.
+            # Signal is deleted only after task POST /complete succeeds.
 
 class AioHTTPHandler:
     """Minimal asyncio HTTP protocol handler."""
@@ -892,7 +1130,8 @@ async def main():
     # Start cleanup + watcher tasks
     # Cleanup disabled — "offline" is meaningless. Watcher handles liveness.
     # asyncio.create_task(cleanup_loop())
-    asyncio.create_task(watcher_loop())  # In-process desktop watcher
+    # PowerShell watcher (watcher.ps1) is the primary signal poller.
+    # Server-side watcher disabled to avoid double-keypress.
 
     # Run HTTP + WebSocket servers concurrently
     await asyncio.gather(

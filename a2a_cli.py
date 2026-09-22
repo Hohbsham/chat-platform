@@ -126,7 +126,7 @@ if __name__ == "__main__":
     sp_health = sp.add_parser("health", help="Show platform health")
 
     sp_send = sp.add_parser("send", help="Send chat message (alias for chat)")
-    sp_send.add_argument("--name", required=True)
+    sp_send.add_argument("--sender", required=True)
     sp_send.add_argument("--msg", required=True)
 
     sp.add_parser("cleanup")

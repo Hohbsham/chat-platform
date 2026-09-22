@@ -89,6 +89,27 @@ def click_submit(hwnd):
     pyautogui.click(cx, cy)
 
 
+def focus_claude_input():
+    """Focus the Claude Code input box via the Command Palette.
+
+    Percentage-based clicks break whenever the layout shifts (terminal panel
+    open, sidebar width, panel docked to a different edge). The palette
+    command 'Claude Code: Focus input' resolves the input box regardless of
+    where it is on screen, so no coordinates are involved.
+    """
+    import pyautogui
+    # Close any stray palette/quick-pick first so we start from a known state.
+    pyautogui.press("escape")
+    time.sleep(0.2)
+    pyautogui.hotkey("ctrl", "shift", "p")
+    time.sleep(0.7)
+    # Palette prefills '>'; typing the title filters to the focus command.
+    pyautogui.write("Claude Code: Focus input", interval=0.02)
+    time.sleep(0.9)
+    pyautogui.press("enter")
+    time.sleep(0.8)
+
+
 def wake_up(agent_name=None):
     """Wake up a specific agent's VS Code window."""
     if not agent_name or agent_name not in AGENT_WINDOWS:
@@ -104,9 +125,21 @@ def wake_up(agent_name=None):
 
     import pyautogui
 
-    # Force foreground and KEEP it — re-force before each operation
+    # Force foreground — hide ALL console windows first, then activate target
+    CONSOLE_CLASS = "ConsoleWindowClass"
+    def _hide_cb(h, _):
+        if user32.IsWindowVisible(h):
+            buf = ctypes.create_unicode_buffer(32)
+            user32.GetClassNameW(h, buf, 32)
+            if buf.value == CONSOLE_CLASS:
+                user32.ShowWindow(h, 0)
+        return True
+    HIDE_ALL = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)(_hide_cb)
+
     def ensure_foreground():
         for _ in range(5):
+            user32.EnumWindows(HIDE_ALL, 0)
+            time.sleep(0.15)
             user32.SetForegroundWindow(hwnd)
             user32.BringWindowToTop(hwnd)
             time.sleep(0.2)
@@ -117,31 +150,39 @@ def wake_up(agent_name=None):
     if not ensure_foreground():
         return False
 
-    rect = (ctypes.c_int * 4)()
-    ctypes.windll.dwmapi.DwmGetWindowAttribute(
-        hwnd, 9, ctypes.byref(rect), ctypes.sizeof(rect))
-    wx, wy = rect[0], rect[1]
-    ww, wh = rect[2] - wx, rect[3] - wy
+    # Read signal to check if we need to switch models
+    import glob
+    SIGDIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "signals")
+    sig_files = glob.glob(os.path.join(SIGDIR, f"{agent_name}_*.json")) + [os.path.join(SIGDIR, f"{agent_name}.json")]
+    sig_path = sig_files[0] if sig_files else ""
+    model_cmd = None
+    if sig_path and os.path.exists(sig_path):
+        try:
+            with open(sig_path, "r", encoding="utf-8") as f:
+                sig = json.loads(f.read())
+            model_cmd = sig.get("model_cmd")
+        except Exception:
+            pass
 
-    # Triple-click Claude input box at (60%, 65%)
+    # Switch Sogou IME to English mode (Shift toggles CN→EN)
     ensure_foreground()
-    ix, iy = wx + int(ww * 0.60), wy + int(wh * 0.65)
-    pyautogui.click(ix, iy, clicks=3, interval=0.1)
-    time.sleep(0.5)
+    pyautogui.press('shift')
+    time.sleep(0.15)
 
-    # Type trigger text
+    # Focus the input box by command, not by coordinates
     ensure_foreground()
+    focus_claude_input()
+
+    # Clear whatever was already in the box, then type the trigger
+    ensure_foreground()
+    pyautogui.hotkey('ctrl', 'a')
+    time.sleep(0.15)
     pyautogui.write('look at signals/', interval=0.05)
     time.sleep(0.5)
 
-    # Single submit click at (79%, 70%)
+    # Submit with Enter — the send button moves, Enter does not
     ensure_foreground()
-    sx, sy = wx + int(ww * 0.79), wy + int(wh * 0.70)
-    pyautogui.moveTo(sx, sy, duration=0.1)
-    time.sleep(0.1)
-    pyautogui.mouseDown(sx, sy)
-    time.sleep(0.05)
-    pyautogui.mouseUp(sx, sy)
+    pyautogui.press('enter')
 
     # Wait for Claude hook to process
     time.sleep(15)
