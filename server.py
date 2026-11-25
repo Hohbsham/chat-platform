@@ -241,6 +241,12 @@ def handle_http(path, method, query, body_bytes, headers=None, client_ip=None):
         if fr is not None:
             return fr
 
+    # 旧的 /api/* 是零鉴权的（历史包袱）。平台现在监听局域网/Tailscale，
+    # 所以对非本机来源一律挡掉，只留 /api/health；联邦层自己带 token，不受影响。
+    if client_ip not in ("127.0.0.1", "::1", None) and os.environ.get("A2A_LEGACY_REMOTE", "0") != "1":
+        if path.startswith("/api/") and path != "/api/health":
+            return _json_response({"ok": False, "error": "这个接口只允许本机访问；远端请用 /api/federation/*"}, 403)
+
     start = time.time()
     cors_headers = {
         "Access-Control-Allow-Origin": "*",
