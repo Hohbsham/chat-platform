@@ -21,6 +21,16 @@ tasks.json
 .DS_Store
 Thumbs.db
 
+# Federation runtime (private, never commit)
+federation.db
+federation.db-wal
+federation.db-shm
+federation_store/
+federation_invite.txt
+agent_credentials.json
+.cursor_*.json
+inbox/
+
 # Temp
 *.tmp
 .env
@@ -32,17 +42,3 @@ signals/
 !agent_windows.json
 !capability_registry.json
 !agent_registry.json
-a2a.db
-a2a.db-wal
-a2a.db-shm
-*.pyc
-__pycache__/
-signals/
-inbox/
-outbox/
-.public_url
-.agent_id
-.*_id
-node_modules/
-channel/node_modules/
-
